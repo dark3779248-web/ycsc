@@ -1,7 +1,8 @@
 "use client";
 
 import Image from "next/image";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { supabase, type AppUser } from "@/lib/supabase/client";
 
 type Route = { id: string; title: string; group: string; desc?: string };
 
@@ -35,17 +36,30 @@ export default function Home() {
   const [mode,setMode] = useState<"mobile"|"admin">("mobile");
   const [route,setRoute] = useState("home");
   const [toast,setToast] = useState("");
-  const [balance,setBalance] = useState(12840.52);
+  const [balance,setBalance] = useState(0);
+  const [user,setUser] = useState<AppUser|null>(null);
+  const [authReady,setAuthReady] = useState(false);
+  useEffect(()=>{
+    const loadProfile=async(nextUser:AppUser|null)=>{
+      setUser(nextUser);
+      if(!nextUser){setBalance(0);setAuthReady(true);return}
+      const {data}=await supabase.from("profiles").select("virtual_balance").eq("id",nextUser.id).single();
+      setBalance(Number(data?.virtual_balance ?? 10));setAuthReady(true);
+    };
+    supabase.auth.getUser().then(({data})=>loadProfile(data.user));
+    const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,session)=>loadProfile(session?.user??null));
+    return ()=>subscription.unsubscribe();
+  },[]);
   const notify=(message:string)=>{setToast(message); window.setTimeout(()=>setToast(""),2200)};
   const go=(id:string)=>{setRoute(id); window.scrollTo({top:0,behavior:"smooth"})};
   return <main className={mode==="admin"?"app admin-mode":"app"}>
     <button className="mode-switch" onClick={()=>{setMode(mode==="mobile"?"admin":"mobile");setRoute(mode==="mobile"?"dashboard":"home")}}>{mode==="mobile"?"管理后台 →":"← 用户端"}</button>
-    {mode==="mobile" ? <MobileApp route={route} go={go} notify={notify} balance={balance} setBalance={setBalance}/> : <AdminApp route={route} go={go} notify={notify}/>} 
+    {mode==="mobile" ? <MobileApp route={route} go={go} notify={notify} balance={balance} setBalance={setBalance} user={user} authReady={authReady}/> : <AdminApp route={route} go={go} notify={notify}/>} 
     {toast && <div className="toast">✓ {toast}</div>}
   </main>;
 }
 
-function MobileApp({route,go,notify,balance,setBalance}:{route:string;go:(id:string)=>void;notify:(s:string)=>void;balance:number;setBalance:(n:number)=>void}) {
+function MobileApp({route,go,notify,balance,setBalance,user,authReady}:{route:string;go:(id:string)=>void;notify:(s:string)=>void;balance:number;setBalance:(n:number)=>void;user:AppUser|null;authReady:boolean}) {
   const page=mobileRoutes.find(x=>x.id===route) || mobileRoutes[0];
   const activeGroup=page.group==="登录注册"?"我的":page.group;
   return <section className="phone-shell">
@@ -61,7 +75,7 @@ function MobileApp({route,go,notify,balance,setBalance}:{route:string;go:(id:str
         {["activities","checkin","tasks","invite","leaderboard","rewards"].includes(route) && <ActivityPage type={route} notify={notify} go={go}/>} 
         {["ai","ai-chat","analysis"].includes(route) && <AIPage type={route} notify={notify} go={go}/>} 
         {["support","live-chat","tickets"].includes(route) && <SupportPage type={route} notify={notify} go={go}/>} 
-        {["account","deposit","withdraw","records","history","orders","settlements","kyc","security","profile","vip","saved","trade-pin"].includes(route) && <AccountPage type={route} notify={notify} go={go} balance={balance} setBalance={setBalance}/>} 
+        {["account","deposit","withdraw","records","history","orders","settlements","kyc","security","profile","vip","saved","trade-pin"].includes(route) && (!authReady?<div className="mobile-content"><p>正在读取账户…</p></div>:user?<AccountPage type={route} notify={notify} go={go} balance={balance} setBalance={setBalance} user={user}/>:<AuthPage type="login" notify={notify} go={go}/>)} 
         {["login","register","verify","forgot"].includes(route) && <AuthPage type={route} notify={notify} go={go}/>} 
       </div>
       {! ["login","register","verify","forgot","order"].includes(route) && <BottomNav active={activeGroup} go={go}/>} 
@@ -108,7 +122,7 @@ function SupportPage({type,notify,go}:{type:string;notify:(s:string)=>void;go:(s
  if(type==="live-chat")return <Chat title="在线客服 · 小慧" onSend={()=>notify("消息已发送")}/>;
  return <div className="mobile-content"><button className="primary" onClick={()=>notify("新工单已创建")}>＋ 创建新工单</button><div className="ticket"><span className="tag">处理中</span><b>提现审核时间咨询</b><p>工单 #FW-20260728-018</p><small>客服 5 分钟前回复</small></div><div className="ticket"><span className="tag muted">已关闭</span><b>充值未到账</b><p>工单 #FW-20260720-106</p><small>7 天前</small></div></div>}
 
-function AccountPage({type,notify,go,balance,setBalance}:{type:string;notify:(s:string)=>void;go:(s:string)=>void;balance:number;setBalance:(n:number)=>void}){if(type==="account")return <div className="mobile-content"><div className="wallet-card"><span>总资产估值 (USDT)</span><b>${balance.toLocaleString()}</b><em>今日收益 +$248.32</em><div><button onClick={()=>go("deposit")}>充值</button><button onClick={()=>go("withdraw")}>提现</button><button onClick={()=>go("records")}>记录</button></div></div><SectionTitle title="账户服务"/><div className="menu-list">{[["positions","我的持仓"],["history","预测历史"],["kyc","身份认证"],["security","安全设置"],["vip","VIP 等级"],["saved","收款账户"],["profile","编辑资料"]].map(([id,t])=><button key={id} onClick={()=>go(id)}><span>{t}</span><b>›</b></button>)}</div></div>;
+function AccountPage({type,notify,go,balance,setBalance,user}:{type:string;notify:(s:string)=>void;go:(s:string)=>void;balance:number;setBalance:(n:number)=>void;user:AppUser}){if(type==="account")return <div className="mobile-content"><div className="wallet-card"><span>模拟资产 (FW Credits)</span><b>{balance.toLocaleString()} FW</b><em>{user.email}</em><div><button onClick={()=>notify("MVP 暂不开放真实充值")}>充值</button><button onClick={()=>notify("MVP 暂不开放真实提现")}>提现</button><button onClick={()=>go("records")}>记录</button></div></div><SectionTitle title="账户服务"/><div className="menu-list">{[["positions","我的持仓"],["history","预测历史"],["kyc","身份认证"],["security","安全设置"],["vip","VIP 等级"],["saved","收款账户"],["profile","编辑资料"]].map(([id,t])=><button key={id} onClick={()=>go(id)}><span>{t}</span><b>›</b></button>)}<button onClick={async()=>{await supabase.auth.signOut();notify("已安全退出");go("home")}}><span>退出登录</span><b>›</b></button></div></div>;
  if(type==="deposit"||type==="withdraw")return <MoneyForm type={type} notify={notify} balance={balance} setBalance={setBalance} go={go}/>;
  if(["records","history","orders","settlements"].includes(type))return <RecordPage type={type}/>;
  if(type==="kyc")return <div className="mobile-content"><div className="kyc-state">✓<h2>身份认证已通过</h2><p>您已完成高级身份认证</p></div><InfoCard title="认证信息" text="姓名：李** · 国家/地区：中国 · 证件：护照 · 认证时间：2026-07-18"/><div className="limits"><div><span>每日提现额度</span><b>$100,000</b></div><div><span>法币充值额度</span><b>$50,000</b></div></div></div>;
@@ -122,7 +136,7 @@ function MoneyForm({type,notify,balance,setBalance,go}:{type:string;notify:(s:st
 
 function RecordPage({type}:{type:string}){const title:Record<string,string>={records:"资金记录",history:"预测历史",orders:"挂单记录",settlements:"结算记录"};return <div className="mobile-content"><div className="segmented"><button className="active">全部</button><button>收入</button><button>支出</button></div><ListPage items={[`${title[type]} · BTC 市场 +$214.60`,`USDT 充值 +$500.00`,`预测下单 -$100.00`,`活动奖励 +$5.00`,`提现 -$240.00`]}/></div>}
 
-function AuthPage({type,notify,go}:{type:string;notify:(s:string)=>void;go:(s:string)=>void}){if(type==="verify")return <div className="mobile-content auth"><div className="auth-icon">✉</div><h2>请输入验证码</h2><p>验证码已发送至 us***@example.com</p><div className="code-inputs">{[6,2,9,"","",""] .map((x,i)=><input key={i} value={x}/>)}</div><button className="primary" onClick={()=>{notify("验证成功");go("home")}}>验证并继续</button></div>;const isRegister=type==="register";return <div className="mobile-content auth"><Image src="/figma/app-logo.png" alt="FinWise" width={64} height={64}/><h2>{type==="forgot"?"重置登录密码":isRegister?"欢迎加入 FinWise":"欢迎回来"}</h2><p>{isRegister?"高效智能的区块链预测分析市场":"登录以继续您的预测之旅"}</p><FormPage fields={type==="forgot"?["邮箱地址"]:isRegister?["邮箱地址","设置密码","确认密码"]:["邮箱地址","登录密码"]} button={type==="forgot"?"发送验证码":isRegister?"创建账户":"登录"} notify={()=>{notify(type==="forgot"?"验证码已发送":isRegister?"账户创建成功":"登录成功");go(type==="forgot"||isRegister?"verify":"home")}}/><button className="text-link" onClick={()=>go(isRegister?"login":"register")}>{isRegister?"已有账号？立即登录":"没有账号？免费注册"}</button>{type==="login"&&<button className="text-link" onClick={()=>go("forgot")}>忘记密码？</button>}</div>}
+function AuthPage({type,notify,go}:{type:string;notify:(s:string)=>void;go:(s:string)=>void}){const [email,setEmail]=useState("");const [password,setPassword]=useState("");const [confirm,setConfirm]=useState("");const [busy,setBusy]=useState(false);const [error,setError]=useState("");const isRegister=type==="register";const submit=async()=>{setError("");if(!email){setError("请输入邮箱地址");return}if(type!=="forgot"&&password.length<8){setError("密码至少需要 8 位");return}if(isRegister&&password!==confirm){setError("两次输入的密码不一致");return}setBusy(true);if(type==="forgot"){const {error:e}=await supabase.auth.resetPasswordForEmail(email,{redirectTo:`${window.location.origin}/`});setBusy(false);if(e){setError(e.message);return}notify("重置邮件已发送，请检查邮箱");go("login");return}if(isRegister){const {data,error:e}=await supabase.auth.signUp({email,password,options:{emailRedirectTo:`${window.location.origin}/`}});setBusy(false);if(e){setError(e.message);return}if(data.session){notify("账户创建成功，已获得 10 FW");go("home")}else{notify("确认邮件已发送，请检查邮箱");go("login")}return}const {error:e}=await supabase.auth.signInWithPassword({email,password});setBusy(false);if(e){setError("邮箱或密码错误");return}notify("登录成功");go("home")};return <div className="mobile-content auth"><Image src="/figma/app-logo.png" alt="FinWise" width={64} height={64}/><h2>{type==="forgot"?"重置登录密码":isRegister?"欢迎加入 FinWise":"欢迎回来"}</h2><p>{isRegister?"注册即获得 10 FW 模拟积分":"登录以继续您的预测之旅"}</p><div className="form-card"><label>邮箱地址<input type="email" autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="请输入邮箱地址"/></label>{type!=="forgot"&&<label>登录密码<input type="password" autoComplete={isRegister?"new-password":"current-password"} value={password} onChange={e=>setPassword(e.target.value)} placeholder="至少 8 位密码"/></label>}{isRegister&&<label>确认密码<input type="password" autoComplete="new-password" value={confirm} onChange={e=>setConfirm(e.target.value)} placeholder="再次输入密码"/></label>}{error&&<p className="auth-error">{error}</p>}<button className="primary" disabled={busy} onClick={submit}>{busy?"处理中…":type==="forgot"?"发送重置邮件":isRegister?"创建账户":"登录"}</button></div><button className="text-link" onClick={()=>go(isRegister?"login":"register")}>{isRegister?"已有账号？立即登录":"没有账号？免费注册"}</button>{type==="login"&&<button className="text-link" onClick={()=>go("forgot")}>忘记密码？</button>}</div>}
 
 function FormPage({fields,button,notify}:{fields:string[];button:string;notify:(s:string)=>void}){return <div className="form-card">{fields.map(x=><label key={x}>{x}<input placeholder={`请输入${x}`}/></label>)}<button className="primary" onClick={()=>notify(`${button}成功`)}>{button}</button></div>}
 function InfoCard({title,text}:{title:string;text:string}){return <div className="info-card"><b>{title}</b><p>{text}</p></div>}
