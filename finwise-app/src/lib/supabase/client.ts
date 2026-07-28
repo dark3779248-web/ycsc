@@ -63,8 +63,8 @@ export const supabase = {
       if (!result.error) save(result.data as Session, "SIGNED_IN");
       return result;
     },
-    async signUp({ email, password, options }: { email: string; password: string; options?: { emailRedirectTo?: string } }) {
-      const result = await request("/auth/v1/signup", { method: "POST", body: JSON.stringify({ email, password, data: {}, email_redirect_to: options?.emailRedirectTo }) });
+    async signUp({ email, password, options }: { email: string; password: string; options?: { emailRedirectTo?: string; displayName?: string } }) {
+      const result = await request("/auth/v1/signup", { method: "POST", body: JSON.stringify({ email, password, data: { display_name: options?.displayName }, email_redirect_to: options?.emailRedirectTo }) });
       const payload = result.data as (Session & { session?: Session }) | null;
       const next = payload?.access_token ? payload as Session : payload?.session || null;
       if (next) save(next, "SIGNED_IN");
