@@ -7,6 +7,10 @@ export type AppPosition = {
   user_id: string; market_id: string; side: "yes" | "no"; shares: number; cost_basis: number; updated_at: string;
   markets: { title: string; status: "open" | "closed" | "settled" | "cancelled"; outcome: "yes" | "no" | null; yes_price: number; no_price: number };
 };
+export type AppLedgerEntry = {
+  id: string; kind: "welcome_bonus" | "trade_debit" | "settlement_credit" | "admin_adjustment";
+  amount: number; balance_after: number; note: string | null; created_at: string;
+};
 type Session = { access_token: string; refresh_token?: string; user: AppUser };
 type Listener = (event: string, session: Session | null) => void;
 const listeners = new Set<Listener>();
@@ -39,6 +43,7 @@ async function request(path: string, init: RequestInit = {}, authenticated = fal
   const token = authenticated ? session()?.access_token : undefined;
   const response = await fetch(`${url}${path}`, {
     ...init,
+    cache: "no-store",
     headers: { apikey: key, "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...init.headers },
   });
   const data = response.status === 204 ? null : await response.json().catch(() => null);
@@ -115,5 +120,10 @@ export const supabase = {
     const select = "user_id,market_id,side,shares,cost_basis,updated_at,markets(title,status,outcome,yes_price,no_price)";
     const result = await request(`/rest/v1/positions?select=${encodeURIComponent(select)}&order=updated_at.desc`, {}, true);
     return result as { data: AppPosition[] | null; error: { message: string } | null };
+  },
+  async getLedger() {
+    const select = "id,kind,amount,balance_after,note,created_at";
+    const result = await request(`/rest/v1/ledger_entries?select=${encodeURIComponent(select)}&order=created_at.desc`, {}, true);
+    return result as { data: AppLedgerEntry[] | null; error: { message: string } | null };
   },
 };
