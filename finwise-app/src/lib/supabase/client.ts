@@ -3,6 +3,10 @@ const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!;
 const storageKey = "finwise_supabase_session";
 
 export type AppUser = { id: string; email?: string };
+export type AppPosition = {
+  user_id: string; market_id: string; side: "yes" | "no"; shares: number; cost_basis: number; updated_at: string;
+  markets: { title: string; status: "open" | "closed" | "settled" | "cancelled"; outcome: "yes" | "no" | null; yes_price: number; no_price: number };
+};
 type Session = { access_token: string; refresh_token?: string; user: AppUser };
 type Listener = (event: string, session: Session | null) => void;
 const listeners = new Set<Listener>();
@@ -17,6 +21,11 @@ function translateError(message: string) {
     [/email not confirmed/i, "邮箱尚未验证，请先查看确认邮件。"],
     [/password should be at least/i, "密码长度未达到安全要求。"],
     [/signup is disabled/i, "当前暂未开放注册。"],
+    [/AUTH_REQUIRED/i, "请先登录后再进行预测。"],
+    [/MIN_AMOUNT/i, "单笔预测金额不能低于 1 FW。"],
+    [/MARKET_NOT_FOUND/i, "未找到该预测市场。"],
+    [/MARKET_CLOSED/i, "该市场已经停止预测。"],
+    [/INSUFFICIENT_BALANCE/i, "账户余额不足，请减少预测金额。"],
   ];
   return translations.find(([pattern]) => pattern.test(message))?.[1] || "操作失败，请稍后重试。";
 }
@@ -97,5 +106,14 @@ export const supabase = {
       },
     };
     return query;
+  },
+  async placeOrder(input: { marketSlug: string; side: "yes" | "no"; amount: number }) {
+    const result = await request("/rest/v1/rpc/place_order", { method: "POST", body: JSON.stringify({ p_market_slug: input.marketSlug, p_side: input.side, p_amount: input.amount }) }, true);
+    return result as { data: { order_id: string; balance: number; shares: number; price: number } | null; error: { message: string } | null };
+  },
+  async getPositions() {
+    const select = "user_id,market_id,side,shares,cost_basis,updated_at,markets(title,status,outcome,yes_price,no_price)";
+    const result = await request(`/rest/v1/positions?select=${encodeURIComponent(select)}&order=updated_at.desc`, {}, true);
+    return result as { data: AppPosition[] | null; error: { message: string } | null };
   },
 };
