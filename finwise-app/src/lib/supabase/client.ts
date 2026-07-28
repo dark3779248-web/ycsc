@@ -22,7 +22,7 @@ function translateError(message: string) {
     [/password should be at least/i, "密码长度未达到安全要求。"],
     [/signup is disabled/i, "当前暂未开放注册。"],
     [/AUTH_REQUIRED/i, "请先登录后再进行预测。"],
-    [/MIN_AMOUNT/i, "单笔预测金额不能低于 1 FW。"],
+    [/MIN_AMOUNT/i, "单笔预测金额不能低于 1 USDT。"],
     [/MARKET_NOT_FOUND/i, "未找到该预测市场。"],
     [/MARKET_CLOSED/i, "该市场已经停止预测。"],
     [/INSUFFICIENT_BALANCE/i, "账户余额不足，请减少预测金额。"],
