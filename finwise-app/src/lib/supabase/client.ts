@@ -7,6 +7,20 @@ type Session = { access_token: string; refresh_token?: string; user: AppUser };
 type Listener = (event: string, session: Session | null) => void;
 const listeners = new Set<Listener>();
 
+function translateError(message: string) {
+  const wait = message.match(/For security purposes, you can only request this after (\d+) seconds?\.?/i);
+  if (wait) return `为保障账户安全，请在 ${wait[1]} 秒后重试。`;
+  const translations: Array<[RegExp, string]> = [
+    [/email rate limit exceeded/i, "邮件发送过于频繁，请稍后重试。"],
+    [/user already registered/i, "该邮箱已经注册，请直接登录。"],
+    [/invalid login credentials/i, "邮箱或密码错误。"],
+    [/email not confirmed/i, "邮箱尚未验证，请先查看确认邮件。"],
+    [/password should be at least/i, "密码长度未达到安全要求。"],
+    [/signup is disabled/i, "当前暂未开放注册。"],
+  ];
+  return translations.find(([pattern]) => pattern.test(message))?.[1] || "操作失败，请稍后重试。";
+}
+
 function session(): Session | null {
   if (typeof window === "undefined") return null;
   try { return JSON.parse(localStorage.getItem(storageKey) || "null"); } catch { return null; }
@@ -19,7 +33,10 @@ async function request(path: string, init: RequestInit = {}, authenticated = fal
     headers: { apikey: key, "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...init.headers },
   });
   const data = response.status === 204 ? null : await response.json().catch(() => null);
-  if (!response.ok) return { data: null, error: { message: data?.msg || data?.message || data?.error_description || "请求失败" } };
+  if (!response.ok) {
+    const message = data?.msg || data?.message || data?.error_description || "请求失败";
+    return { data: null, error: { message: translateError(message) } };
+  }
   return { data, error: null };
 }
 
