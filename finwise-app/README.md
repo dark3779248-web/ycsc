@@ -1,6 +1,6 @@
 # FinWise 预测市场
 
-FinWise 是基于 Next.js、Supabase 和 Vercel 的预测市场 MVP。目前只使用 FW 模拟积分，不涉及真实资金。
+FinWise 是基于 Next.js、Supabase 和 Vercel 的预测市场 MVP。目前显示模拟 USDT，不涉及真实资金。
 
 ## 开发文档
 
