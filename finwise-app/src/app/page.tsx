@@ -1,119 +1,144 @@
 "use client";
 
 import Image from "next/image";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
-const categories = ["热门", "虚拟币", "政治", "体育", "电竞", "娱乐"];
-const navItems = [
-  ["首页", "/figma/home.svg"],
-  ["活动", "/figma/gift.svg"],
-  ["客服", "/figma/headset.svg"],
-  ["我的", "/figma/user.svg"],
+type Route = { id: string; title: string; group: string; desc?: string };
+
+const mobileRoutes: Route[] = [
+  {id:"home",title:"预测市场",group:"首页"},{id:"market",title:"市场详情",group:"首页"},{id:"order",title:"预测下单",group:"首页"},{id:"positions",title:"我的持仓",group:"首页"},{id:"search",title:"搜索市场",group:"首页"},{id:"ended",title:"已结束市场",group:"首页"},{id:"notifications",title:"通知中心",group:"首页"},
+  {id:"activities",title:"活动中心",group:"活动"},{id:"checkin",title:"每日签到",group:"活动"},{id:"tasks",title:"新手任务",group:"活动"},{id:"invite",title:"邀请好友",group:"活动"},{id:"leaderboard",title:"排行榜",group:"活动"},{id:"rewards",title:"我的奖励",group:"活动"},
+  {id:"ai",title:"AI 智能助手",group:"AI"},{id:"ai-chat",title:"AI 对话",group:"AI"},{id:"analysis",title:"AI 市场分析",group:"AI"},{id:"support",title:"客服中心",group:"客服"},{id:"live-chat",title:"在线客服",group:"客服"},{id:"tickets",title:"我的工单",group:"客服"},
+  {id:"account",title:"我的账户",group:"我的"},{id:"deposit",title:"数字货币充值",group:"我的"},{id:"withdraw",title:"申请提现",group:"我的"},{id:"records",title:"资金记录",group:"我的"},{id:"history",title:"预测历史",group:"我的"},{id:"orders",title:"挂单记录",group:"我的"},{id:"settlements",title:"结算记录",group:"我的"},{id:"kyc",title:"身份认证",group:"我的"},{id:"security",title:"安全设置",group:"我的"},{id:"profile",title:"编辑资料",group:"我的"},{id:"vip",title:"VIP 等级",group:"我的"},{id:"saved",title:"已保存账户",group:"我的"},{id:"trade-pin",title:"交易密码",group:"我的"},
+  {id:"login",title:"登录 FinWise",group:"登录注册"},{id:"register",title:"创建账户",group:"登录注册"},{id:"verify",title:"安全验证",group:"登录注册"},{id:"forgot",title:"忘记密码",group:"登录注册"},
+];
+
+const adminRoutes: Route[] = [
+  {id:"dashboard",title:"仪表盘",group:"总览"},{id:"users",title:"用户列表",group:"用户管理"},{id:"user-detail",title:"用户详情",group:"用户管理"},{id:"ip",title:"IP 管理",group:"用户管理"},
+  {id:"markets",title:"市场列表",group:"市场交易"},{id:"market-create",title:"创建市场",group:"市场交易"},{id:"trades",title:"交易订单",group:"市场交易"},
+  {id:"finance",title:"财务总览",group:"财务管理"},{id:"deposits",title:"充值记录",group:"财务管理"},{id:"withdrawals",title:"提现审核",group:"财务管理"},{id:"deposit-monitor",title:"充值监控",group:"财务管理"},{id:"deposit-orders",title:"充值订单处理",group:"财务管理"},
+  {id:"campaigns",title:"活动列表",group:"运营管理"},{id:"campaign-edit",title:"活动编辑",group:"运营管理"},{id:"ops-config",title:"活动运营配置",group:"运营管理"},{id:"push",title:"推送通知管理",group:"运营管理"},
+  {id:"ai-dashboard",title:"AI 仪表盘",group:"AI管理"},{id:"ai-logs",title:"AI 日志",group:"AI管理"},
+  {id:"tickets-admin",title:"工单列表",group:"客服内容"},{id:"ticket-detail",title:"工单详情",group:"客服内容"},{id:"faq",title:"FAQ 管理",group:"客服内容"},{id:"announcements",title:"公告管理",group:"客服内容"},
+  {id:"kyc-review",title:"KYC 审核",group:"系统安全"},{id:"roles",title:"角色权限",group:"系统安全"},{id:"audit",title:"操作日志",group:"系统安全"},{id:"risk",title:"风控管理",group:"系统安全"},{id:"settings",title:"全局设置",group:"系统安全"},{id:"vip-levels",title:"VIP 等级管理",group:"系统安全"},{id:"vip-users",title:"VIP 用户列表",group:"系统安全"},
 ];
 
 const markets = [
-  {
-    title: "BTC 是否会在 8 月突破 10 万美元?",
-    volume: "$1.2M",
-    people: "1.4K",
-    days: 15,
-    yes: 64,
-    no: 36,
-    color: "#00d09e",
-    bars: [8, 12, 10, 16, 14, 20, 18, 22, 24, 22, 20],
-  },
-  {
-    title: "美国SEC是否会在下月批准 Solana 现货 ETF?",
-    volume: "$450K",
-    people: "850",
-    days: 28,
-    yes: 55,
-    no: 45,
-    color: "#ff4d4d",
-    bars: [8, 12, 10, 16, 14, 20, 18, 22, 24, 22, 20],
-  },
+  {title:"BTC 是否会在 8 月突破 10 万美元?",volume:"$1.2M",people:"1.4K",days:15,yes:64,no:36,color:"#00d09e"},
+  {title:"美国 SEC 是否会在下月批准 Solana 现货 ETF?",volume:"$450K",people:"850",days:28,yes:55,no:45,color:"#ff4d4d"},
+  {title:"英格兰队能否夺得下一届世界杯冠军?",volume:"$680K",people:"932",days:41,yes:38,no:62,color:"#00d09e"},
 ];
 
+const icons: Record<string,string> = {首页:"/figma/home.svg",活动:"/figma/gift.svg",AI:"/figma/brain.svg",客服:"/figma/headset.svg",我的:"/figma/user.svg"};
+
 export default function Home() {
-  const [category, setCategory] = useState("热门");
-  const [activeNav, setActiveNav] = useState("首页");
-  const [selection, setSelection] = useState<string | null>(null);
-  const [notice, setNotice] = useState(false);
-
-  return (
-    <main className="stage">
-      <section className="phone" aria-label="预测市场移动端首页">
-        <div className="statusbar">
-          <strong>16:04</strong>
-          <div className="status-icons">
-            <Image src="/figma/ios-signal.svg" alt="信号" width={18} height={12} />
-            <Image src="/figma/ios-battery.svg" alt="电量" width={24} height={12} />
-          </div>
-        </div>
-
-        <header className="header">
-          <div className="brand">
-            <Image className="logo" src="/figma/app-logo.png" alt="FinWise" width={32} height={32} />
-            <h1>预测市场</h1>
-          </div>
-          <button className="icon-button" onClick={() => setNotice(!notice)} aria-label="通知">
-            <Image src="/figma/bell.svg" alt="" width={24} height={24} />
-            {notice && <span className="dot" />}
-          </button>
-        </header>
-
-        <div className="scroll-area">
-          <div className="content">
-            <button className="banner" onClick={() => setNotice(true)}>
-              <strong>FinWise 新用户福利</strong>
-              <span>注册即送 $10 体验金，预测赚取高达 100x 收益！</span>
-            </button>
-
-            <div className="chips" aria-label="市场分类">
-              {categories.map((item) => (
-                <button key={item} className={category === item ? "chip active" : "chip"} onClick={() => setCategory(item)}>
-                  {item}
-                </button>
-              ))}
-            </div>
-
-            <div className="section-title"><h2>{category === "热门" ? "热门预测" : `${category}预测`}</h2><button>查看全部</button></div>
-
-            {markets.map((market, marketIndex) => (
-              <article className="market-card" key={market.title}>
-                <button className="market-title"><strong>{market.title}</strong><Image src="/figma/chevron-right.svg" alt="查看详情" width={16} height={16} /></button>
-                <div className="sparkline" aria-hidden="true">
-                  {market.bars.map((height, index) => <i key={index} style={{ height, backgroundColor: market.color }} />)}
-                </div>
-                <div className="meta">
-                  <span>交易量: {market.volume}・{market.people} 参与</span>
-                  <span className="deadline"><Image src="/figma/clock.svg" alt="" width={12} height={12} />{market.days}天后截止</span>
-                </div>
-                <div className="actions">
-                  <button className={selection === `${marketIndex}-yes` ? "yes selected" : "yes"} onClick={() => setSelection(`${marketIndex}-yes`)}>Yes ¢{market.yes}</button>
-                  <button className={selection === `${marketIndex}-no` ? "no selected" : "no"} onClick={() => setSelection(`${marketIndex}-no`)}>No ¢{market.no}</button>
-                </div>
-              </article>
-            ))}
-
-            <div className="section-title urgent-title"><h2>即将截止 <em>紧急</em></h2><button>查看全部</button></div>
-            <article className="urgent-card">
-              <strong>以太坊 Gas 费在今日结束前是否会突破 50 Gwei?</strong>
-              <div><b>仅剩 02:45:12</b><span>Yes ¢15 / No ¢85</span></div>
-            </article>
-          </div>
-        </div>
-
-        <nav className="bottom-nav">
-          {navItems.slice(0, 2).map(([label, icon]) => <NavButton key={label} label={label} icon={icon} active={activeNav === label} onClick={setActiveNav} />)}
-          <button className="ai-button" aria-label="AI 助手"><Image src="/figma/brain.svg" alt="" width={24} height={24} /></button>
-          {navItems.slice(2).map(([label, icon]) => <NavButton key={label} label={label} icon={icon} active={activeNav === label} onClick={setActiveNav} />)}
-        </nav>
-      </section>
-    </main>
-  );
+  const [mode,setMode] = useState<"mobile"|"admin">("mobile");
+  const [route,setRoute] = useState("home");
+  const [toast,setToast] = useState("");
+  const [balance,setBalance] = useState(12840.52);
+  const notify=(message:string)=>{setToast(message); window.setTimeout(()=>setToast(""),2200)};
+  const go=(id:string)=>{setRoute(id); window.scrollTo({top:0,behavior:"smooth"})};
+  return <main className={mode==="admin"?"app admin-mode":"app"}>
+    <button className="mode-switch" onClick={()=>{setMode(mode==="mobile"?"admin":"mobile");setRoute(mode==="mobile"?"dashboard":"home")}}>{mode==="mobile"?"管理后台 →":"← 用户端"}</button>
+    {mode==="mobile" ? <MobileApp route={route} go={go} notify={notify} balance={balance} setBalance={setBalance}/> : <AdminApp route={route} go={go} notify={notify}/>} 
+    {toast && <div className="toast">✓ {toast}</div>}
+  </main>;
 }
 
-function NavButton({ label, icon, active, onClick }: { label: string; icon: string; active: boolean; onClick: (label: string) => void }) {
-  return <button className={active ? "nav-item active" : "nav-item"} onClick={() => onClick(label)}><Image src={icon} alt="" width={20} height={20} /><span>{label}</span></button>;
+function MobileApp({route,go,notify,balance,setBalance}:{route:string;go:(id:string)=>void;notify:(s:string)=>void;balance:number;setBalance:(n:number)=>void}) {
+  const page=mobileRoutes.find(x=>x.id===route) || mobileRoutes[0];
+  const activeGroup=page.group==="登录注册"?"我的":page.group;
+  return <section className="phone-shell">
+    <div className="phone">
+      <StatusBar/>
+      {route==="home" ? <HomeHeader go={go}/> : <SubHeader title={page.title} go={go}/>} 
+      <div className="mobile-scroll">
+        {route==="home" && <MarketHome go={go}/>} 
+        {route==="market" && <MarketDetail go={go}/>} 
+        {route==="order" && <OrderPage notify={notify} go={go} balance={balance} setBalance={setBalance}/>} 
+        {route==="positions" && <Positions/>}
+        {["search","ended","notifications"].includes(route) && <Discovery type={route} go={go}/>} 
+        {["activities","checkin","tasks","invite","leaderboard","rewards"].includes(route) && <ActivityPage type={route} notify={notify} go={go}/>} 
+        {["ai","ai-chat","analysis"].includes(route) && <AIPage type={route} notify={notify} go={go}/>} 
+        {["support","live-chat","tickets"].includes(route) && <SupportPage type={route} notify={notify} go={go}/>} 
+        {["account","deposit","withdraw","records","history","orders","settlements","kyc","security","profile","vip","saved","trade-pin"].includes(route) && <AccountPage type={route} notify={notify} go={go} balance={balance} setBalance={setBalance}/>} 
+        {["login","register","verify","forgot"].includes(route) && <AuthPage type={route} notify={notify} go={go}/>} 
+      </div>
+      {! ["login","register","verify","forgot","order"].includes(route) && <BottomNav active={activeGroup} go={go}/>} 
+    </div>
+    <PageDirectory routes={mobileRoutes} current={route} go={go}/>
+  </section>;
 }
+
+function StatusBar(){return <div className="statusbar"><strong>16:04</strong><span><Image src="/figma/ios-signal.svg" alt="信号" width={18} height={12}/><Image src="/figma/ios-battery.svg" alt="电量" width={24} height={12}/></span></div>}
+function HomeHeader({go}:{go:(s:string)=>void}){return <header className="mobile-header"><div className="brand"><Image src="/figma/app-logo.png" alt="FinWise" width={32} height={32}/><h1>预测市场</h1></div><div className="header-actions"><button onClick={()=>go("search")}>⌕</button><button onClick={()=>go("notifications")}><Image src="/figma/bell.svg" alt="通知" width={22} height={22}/></button></div></header>}
+function SubHeader({title,go}:{title:string;go:(s:string)=>void}){return <header className="sub-header"><button onClick={()=>go("home")}>‹</button><h1>{title}</h1><button className="mini-home" onClick={()=>go("home")}>⌂</button></header>}
+
+function MarketHome({go}:{go:(s:string)=>void}) { const [cat,setCat]=useState("热门"); return <div className="mobile-content">
+  <button className="banner" onClick={()=>go("register")}><b>FinWise 新用户福利</b><span>注册即送 $10 体验金，预测赚取高达 100x 收益！</span></button>
+  <div className="chips">{["热门","虚拟币","政治","体育","电竞","娱乐"].map(x=><button key={x} className={cat===x?"active":""} onClick={()=>setCat(x)}>{x}</button>)}</div>
+  <SectionTitle title={cat==="热门"?"热门预测":`${cat}预测`} action="查看全部" onClick={()=>go("search")}/>
+  {markets.slice(0,2).map((m,i)=><MarketCard key={m.title} market={m} go={go} index={i}/>) }
+  <SectionTitle title="即将截止" badge="紧急" action="查看全部" onClick={()=>go("ended")}/>
+  <button className="urgent-card" onClick={()=>go("market")}><b>以太坊 Gas 费在今日结束前是否会突破 50 Gwei?</b><span><em>仅剩 02:45:12</em> Yes ¢15 / No ¢85</span></button>
+ </div> }
+
+function SectionTitle({title,badge,action,onClick}:{title:string;badge?:string;action?:string;onClick?:()=>void}){return <div className="section-title"><h2>{title}{badge&&<em>{badge}</em>}</h2>{action&&<button onClick={onClick}>{action}</button>}</div>}
+function MarketCard({market,go,index}:{market:typeof markets[number];go:(s:string)=>void;index:number}){return <article className="market-card"><button className="market-title" onClick={()=>go("market")}><b>{market.title}</b><Image src="/figma/chevron-right.svg" alt="详情" width={16} height={16}/></button><div className="sparkline">{[8,12,10,16,14,20,18,22,24,22,20].map((h,i)=><i key={i} style={{height:h,background:market.color}}/>)}</div><div className="meta"><span>交易量: {market.volume} · {market.people} 参与</span><span>◷ {market.days}天后截止</span></div><div className="trade-buttons"><button onClick={()=>go("order")}>Yes ¢{market.yes}</button><button onClick={()=>go("order")}>No ¢{market.no}</button></div></article>}
+
+function MarketDetail({go}:{go:(s:string)=>void}){return <div className="mobile-content"><div className="detail-hero"><span className="tag">虚拟币</span><h2>BTC 是否会在 8 月突破 10 万美元?</h2><p>市场将在 2026 年 8 月 31 日 23:59 UTC 截止</p></div><div className="probability"><div><b>64%</b><span>YES 概率</span></div><div className="donut">64</div><div><b>$1.2M</b><span>交易量</span></div></div><div className="chart-card"><SectionTitle title="市场走势" action="24H"/><div className="line-chart">{[32,42,38,55,49,67,72,64].map((h,i)=><i key={i} style={{height:`${h}%`}}/>)}</div></div><InfoCard title="判定规则" text="若 Coinbase BTC/USD 指数在截止时间前达到或超过 $100,000，本市场结算为 YES。"/><div className="sticky-actions"><button onClick={()=>go("order")}>买入 YES · ¢64</button><button onClick={()=>go("order")}>买入 NO · ¢36</button></div></div>}
+
+function OrderPage({notify,go,balance,setBalance}:{notify:(s:string)=>void;go:(s:string)=>void;balance:number;setBalance:(n:number)=>void}){const [side,setSide]=useState("YES");const [amount,setAmount]=useState(100);const submit=()=>{setBalance(Math.max(0,balance-amount));notify("预测下单成功");go("positions")};return <div className="mobile-content"><div className="order-market"><small>BTC 是否会在 8 月突破 10 万美元?</small><b>当前 YES 概率 64%</b></div><div className="segmented"><button className={side==="YES"?"active":""} onClick={()=>setSide("YES")}>YES ¢64</button><button className={side==="NO"?"active no":"no"} onClick={()=>setSide("NO")}>NO ¢36</button></div><div className="form-card"><label>投入金额 (USDT)</label><input value={amount} min={1} type="number" onChange={e=>setAmount(Number(e.target.value))}/><div className="quick">{[10,50,100,500].map(x=><button key={x} onClick={()=>setAmount(x)}>${x}</button>)}</div><div className="summary"><span>可用余额</span><b>${balance.toFixed(2)}</b><span>预计获得份额</span><b>{(amount/(side==="YES"?.64:.36)).toFixed(2)}</b><span>潜在收益</span><b className="green">${(amount/(side==="YES"?.64:.36)-amount).toFixed(2)}</b></div></div><button className="primary" onClick={submit}>确认买入 {side}</button><p className="risk">预测市场存在风险，请根据自身承受能力理性交易。</p></div>}
+
+function Positions(){return <div className="mobile-content"><div className="balance-card"><span>持仓总价值</span><b>$3,248.60</b><em>今日 +$126.40 (+4.05%)</em></div><div className="segmented"><button className="active">持仓中</button><button>已结算</button></div>{markets.slice(0,2).map((m,i)=><div className="position" key={m.title}><b>{m.title}</b><div><span>{i?"NO":"YES"} · {i?420:860} 份</span><strong className="green">+${i?82.40:214.60}</strong></div><progress value={i?45:72} max="100"/></div>)}</div>}
+
+function Discovery({type,go}:{type:string;go:(s:string)=>void}){if(type==="notifications")return <ListPage items={["BTC 市场价格发生显著变化","您的充值已确认到账","每日签到奖励已到账","KYC 身份认证审核通过"]}/>;return <div className="mobile-content"><div className="searchbox">⌕ <input placeholder="搜索预测事件、币种或关键词" autoFocus={type==="search"}/></div><div className="chips"><button className="active">全部</button><button>虚拟币</button><button>体育</button><button>政治</button></div>{markets.map((m,i)=><MarketCard key={m.title} market={m} index={i} go={go}/>)}</div>}
+
+function ActivityPage({type,notify,go}:{type:string;notify:(s:string)=>void;go:(s:string)=>void}){if(type==="activities")return <div className="mobile-content"><div className="campaign-hero"><small>FINWISE SUMMER</small><h2>盛夏预测挑战赛</h2><p>瓜分 50,000 USDT 奖池</p><button onClick={()=>go("leaderboard")}>立即参加</button></div><SectionTitle title="每日福利"/><div className="feature-grid"><Feature title="每日签到" sub="连续签到赢奖励" go={()=>go("checkin")}/><Feature title="新手任务" sub="最高领取 20 USDT" go={()=>go("tasks")}/><Feature title="邀请好友" sub="佣金最高 30%" go={()=>go("invite")}/><Feature title="排行榜" sub="查看实时排名" go={()=>go("leaderboard")}/></div></div>;
+ if(type==="checkin")return <div className="mobile-content"><div className="reward-head">🔥<h2>连续签到 3 天</h2><p>明日可获得 3 USDT 体验金</p></div><div className="calendar-grid">{Array.from({length:7},(_,i)=><div className={i<3?"done":""} key={i}><b>第{i+1}天</b><span>{i<3?"✓":`${i+1}U`}</span></div>)}</div><button className="primary" onClick={()=>notify("签到成功，奖励已到账")}>今日签到</button></div>;
+ if(type==="leaderboard")return <div className="mobile-content"><div className="podium"><div>🥈<b>CryptoFox</b><span>$8,420</span></div><div className="winner">🥇<b>PredictKing</b><span>$12,680</span></div><div>🥉<b>NovaTrader</b><span>$6,930</span></div></div><ListPage items={["4  AlphaOne · $5,842","5  Lily888 · $5,210","6  MarketPro · $4,886","7  FinMaster · $4,520"]}/></div>;
+ if(type==="invite")return <div className="mobile-content"><div className="invite-card"><span>您的专属邀请码</span><b>FW2026</b><button onClick={()=>notify("邀请码已复制")}>复制邀请码</button></div><div className="stats"><div><b>12</b><span>已邀请</span></div><div><b>$184</b><span>累计佣金</span></div><div><b>20%</b><span>返佣比例</span></div></div><InfoCard title="邀请规则" text="好友完成注册并首次充值后，双方均可领取 5 USDT 奖励。好友每笔交易您还可获得佣金。"/></div>;
+ return <div className="mobile-content"><div className="progress-card"><h2>{type==="rewards"?"累计获得 $36.50":"新手成长计划"}</h2><progress value="68" max="100"/><span>已完成 4 / 6 项</span></div>{["完成首次充值","完成一笔预测交易","绑定安全验证器","邀请一位好友"].map((x,i)=><div className="task" key={x}><span className={i<2?"task-icon done":"task-icon"}>{i<2?"✓":i+1}</span><div><b>{x}</b><small>奖励 {i+2} USDT</small></div><button onClick={()=>notify(i<2?"奖励已领取":"任务已开始")}>{i<2?"已领取":"去完成"}</button></div>)}</div>}
+
+function AIPage({type,notify,go}:{type:string;notify:(s:string)=>void;go:(s:string)=>void}){if(type==="ai")return <div className="mobile-content"><div className="ai-hero"><Image src="/figma/brain.svg" alt="AI" width={36} height={36}/><h2>FinWise AI</h2><p>您的智能预测分析伙伴</p><button onClick={()=>go("ai-chat")}>开始对话</button></div><div className="feature-grid"><Feature title="市场分析" sub="AI 解读概率变化" go={()=>go("analysis")}/><Feature title="风险评估" sub="评估组合风险" go={()=>go("analysis")}/><Feature title="机会发现" sub="扫描潜力市场" go={()=>go("analysis")}/><Feature title="每日简报" sub="3 分钟掌握市场" go={()=>notify("简报已生成")}/></div></div>;
+ if(type==="analysis")return <div className="mobile-content"><div className="analysis-card"><span className="tag">AI 深度分析</span><h2>BTC 突破 $100K 的概率上升至 64%</h2><p>过去 24 小时机构资金净流入增长 18%，期权市场看涨偏度持续扩大。</p><div className="confidence"><span>AI 置信度</span><b>87%</b></div></div><InfoCard title="关键驱动因素" text="ETF 净流入保持正值 · 链上长期持有者持续增持 · 宏观流动性预期改善"/><InfoCard title="风险提示" text="短期波动率处于高位，需关注监管与宏观数据的不确定性。"/></div>;
+ return <Chat title="FinWise AI" onSend={()=>notify("AI 正在生成回答...")}/>}
+
+function SupportPage({type,notify,go}:{type:string;notify:(s:string)=>void;go:(s:string)=>void}){if(type==="support")return <div className="mobile-content"><div className="support-hero"><h2>您好，需要什么帮助？</h2><div className="searchbox">⌕ <input placeholder="搜索常见问题"/></div></div><div className="feature-grid"><Feature title="在线客服" sub="平均 30 秒响应" go={()=>go("live-chat")}/><Feature title="我的工单" sub="查看处理进度" go={()=>go("tickets")}/><Feature title="账户安全" sub="登录与验证" go={()=>notify("已打开帮助文章")}/><Feature title="充值提现" sub="资金问题" go={()=>notify("已打开帮助文章")}/></div><ListPage items={["如何完成身份认证？","充值多久可以到账？","预测市场如何结算？","忘记交易密码怎么办？"]}/></div>;
+ if(type==="live-chat")return <Chat title="在线客服 · 小慧" onSend={()=>notify("消息已发送")}/>;
+ return <div className="mobile-content"><button className="primary" onClick={()=>notify("新工单已创建")}>＋ 创建新工单</button><div className="ticket"><span className="tag">处理中</span><b>提现审核时间咨询</b><p>工单 #FW-20260728-018</p><small>客服 5 分钟前回复</small></div><div className="ticket"><span className="tag muted">已关闭</span><b>充值未到账</b><p>工单 #FW-20260720-106</p><small>7 天前</small></div></div>}
+
+function AccountPage({type,notify,go,balance,setBalance}:{type:string;notify:(s:string)=>void;go:(s:string)=>void;balance:number;setBalance:(n:number)=>void}){if(type==="account")return <div className="mobile-content"><div className="wallet-card"><span>总资产估值 (USDT)</span><b>${balance.toLocaleString()}</b><em>今日收益 +$248.32</em><div><button onClick={()=>go("deposit")}>充值</button><button onClick={()=>go("withdraw")}>提现</button><button onClick={()=>go("records")}>记录</button></div></div><SectionTitle title="账户服务"/><div className="menu-list">{[["positions","我的持仓"],["history","预测历史"],["kyc","身份认证"],["security","安全设置"],["vip","VIP 等级"],["saved","收款账户"],["profile","编辑资料"]].map(([id,t])=><button key={id} onClick={()=>go(id)}><span>{t}</span><b>›</b></button>)}</div></div>;
+ if(type==="deposit"||type==="withdraw")return <MoneyForm type={type} notify={notify} balance={balance} setBalance={setBalance} go={go}/>;
+ if(["records","history","orders","settlements"].includes(type))return <RecordPage type={type}/>;
+ if(type==="kyc")return <div className="mobile-content"><div className="kyc-state">✓<h2>身份认证已通过</h2><p>您已完成高级身份认证</p></div><InfoCard title="认证信息" text="姓名：李** · 国家/地区：中国 · 证件：护照 · 认证时间：2026-07-18"/><div className="limits"><div><span>每日提现额度</span><b>$100,000</b></div><div><span>法币充值额度</span><b>$50,000</b></div></div></div>;
+ if(type==="security"||type==="trade-pin")return <div className="mobile-content"><div className="security-score"><span>账户安全评分</span><b>92</b><em>优秀</em></div><div className="menu-list">{["登录密码","谷歌验证器","交易密码","设备管理","防钓鱼码"].map((x,i)=><button key={x} onClick={()=>i===2?go("trade-pin"):notify(`${x}设置已打开`)}><span>{x}<small>{i<3?"已设置":"建议开启"}</small></span><b>›</b></button>)}</div></div>;
+ if(type==="vip")return <div className="mobile-content"><div className="vip-card"><span>当前等级</span><h2>VIP 3</h2><p>距离 VIP 4 还需 $18,240 交易量</p><progress value="68" max="100"/></div><div className="benefits">{["手续费 8 折","AI 分析 100 次/日","专属客户经理","提现快速通道"].map(x=><div key={x}>✓ {x}</div>)}</div></div>;
+ if(type==="profile")return <FormPage fields={["昵称","邮箱地址","手机号","国家/地区"]} button="保存资料" notify={notify}/>;
+ if(type==="saved")return <div className="mobile-content"><div className="saved-account"><b>USDT · TRC20</b><span>TX9m...8Qp2</span><em>默认账户</em></div><button className="primary" onClick={()=>notify("新账户已添加")}>＋ 添加提现账户</button></div>;
+ return <div className="mobile-content"><InfoCard title="账户记录" text="暂无更多内容"/></div>}
+
+function MoneyForm({type,notify,balance,setBalance,go}:{type:string;notify:(s:string)=>void;balance:number;setBalance:(n:number)=>void;go:(s:string)=>void}){const [amount,setAmount]=useState(500);const submit=()=>{if(type==="deposit")setBalance(balance+amount);else setBalance(Math.max(0,balance-amount));notify(type==="deposit"?"充值申请已提交":"提现申请已提交");go("account")};return <div className="mobile-content"><div className="coin-select"><b>USDT</b><span>Tron (TRC20)</span><em>网络费低</em></div>{type==="deposit"?<div className="qr-box"><div className="fake-qr">▦</div><code>TX9m8fA7k2Np4Q...8Qp2</code><button onClick={()=>notify("地址已复制")}>复制地址</button></div>:<div className="form-card"><label>提现地址</label><input placeholder="输入 TRC20 地址"/><label>提现金额</label><input type="number" value={amount} onChange={e=>setAmount(Number(e.target.value))}/><small>可用余额 ${balance.toFixed(2)} · 网络费 1 USDT</small></div>}<InfoCard title="重要提示" text="请确认网络与地址完全一致。区块链交易提交后不可撤销。"/><button className="primary" onClick={submit}>{type==="deposit"?"我已完成转账":"确认提现"}</button></div>}
+
+function RecordPage({type}:{type:string}){const title:Record<string,string>={records:"资金记录",history:"预测历史",orders:"挂单记录",settlements:"结算记录"};return <div className="mobile-content"><div className="segmented"><button className="active">全部</button><button>收入</button><button>支出</button></div><ListPage items={[`${title[type]} · BTC 市场 +$214.60`,`USDT 充值 +$500.00`,`预测下单 -$100.00`,`活动奖励 +$5.00`,`提现 -$240.00`]}/></div>}
+
+function AuthPage({type,notify,go}:{type:string;notify:(s:string)=>void;go:(s:string)=>void}){if(type==="verify")return <div className="mobile-content auth"><div className="auth-icon">✉</div><h2>请输入验证码</h2><p>验证码已发送至 us***@example.com</p><div className="code-inputs">{[6,2,9,"","",""] .map((x,i)=><input key={i} value={x}/>)}</div><button className="primary" onClick={()=>{notify("验证成功");go("home")}}>验证并继续</button></div>;const isRegister=type==="register";return <div className="mobile-content auth"><Image src="/figma/app-logo.png" alt="FinWise" width={64} height={64}/><h2>{type==="forgot"?"重置登录密码":isRegister?"欢迎加入 FinWise":"欢迎回来"}</h2><p>{isRegister?"高效智能的区块链预测分析市场":"登录以继续您的预测之旅"}</p><FormPage fields={type==="forgot"?["邮箱地址"]:isRegister?["邮箱地址","设置密码","确认密码"]:["邮箱地址","登录密码"]} button={type==="forgot"?"发送验证码":isRegister?"创建账户":"登录"} notify={()=>{notify(type==="forgot"?"验证码已发送":isRegister?"账户创建成功":"登录成功");go(type==="forgot"||isRegister?"verify":"home")}}/><button className="text-link" onClick={()=>go(isRegister?"login":"register")}>{isRegister?"已有账号？立即登录":"没有账号？免费注册"}</button>{type==="login"&&<button className="text-link" onClick={()=>go("forgot")}>忘记密码？</button>}</div>}
+
+function FormPage({fields,button,notify}:{fields:string[];button:string;notify:(s:string)=>void}){return <div className="form-card">{fields.map(x=><label key={x}>{x}<input placeholder={`请输入${x}`}/></label>)}<button className="primary" onClick={()=>notify(`${button}成功`)}>{button}</button></div>}
+function InfoCard({title,text}:{title:string;text:string}){return <div className="info-card"><b>{title}</b><p>{text}</p></div>}
+function ListPage({items}:{items:string[]}){return <div className="list-page">{items.map((x,i)=><div key={x}><span className="list-dot">{i+1}</span><b>{x}</b><small>{i+1} 小时前</small></div>)}</div>}
+function Feature({title,sub,go}:{title:string;sub:string;go:()=>void}){return <button className="feature" onClick={go}><b>{title}</b><span>{sub}</span><em>›</em></button>}
+function Chat({title,onSend}:{title:string;onSend:()=>void}){const [text,setText]=useState("");return <div className="chat"><div className="bubble bot">您好，我是{title}。有什么可以帮助您？</div><div className="bubble user">请分析 BTC 短期趋势。</div><div className="bubble bot">当前市场情绪偏多，但波动率较高。建议控制仓位并关注关键支撑位。</div><div className="chat-input"><input value={text} onChange={e=>setText(e.target.value)} placeholder="输入消息..."/><button onClick={()=>{if(text){onSend();setText("")}}}>发送</button></div></div>}
+
+function BottomNav({active,go}:{active:string;go:(s:string)=>void}){const tabs:[[string,string],...Array<[string,string]>]=[["首页","home"],["活动","activities"],["AI","ai"],["客服","support"],["我的","account"]];return <nav className="bottom-nav">{tabs.map(([label,id])=><button key={label} className={active===label?"active":""} onClick={()=>go(id)}><Image src={icons[label]} alt="" width={20} height={20}/><span>{label}</span></button>)}</nav>}
+function PageDirectory({routes,current,go}:{routes:Route[];current:string;go:(s:string)=>void}){const [open,setOpen]=useState(false);const groups=[...new Set(routes.map(x=>x.group))];return <aside className={open?"directory open":"directory"}><button className="directory-toggle" onClick={()=>setOpen(!open)}>{open?"关闭页面目录":"全部页面"}</button>{open&&<div className="directory-panel"><h2>用户端页面</h2>{groups.map(g=><div key={g}><h3>{g}</h3>{routes.filter(x=>x.group===g).map(x=><button className={current===x.id?"active":""} key={x.id} onClick={()=>{go(x.id);setOpen(false)}}>{x.title}</button>)}</div>)}</div>}</aside>}
+
+function AdminApp({route,go,notify}:{route:string;go:(s:string)=>void;notify:(s:string)=>void}){const page=adminRoutes.find(x=>x.id===route)||adminRoutes[0];const groups=[...new Set(adminRoutes.map(x=>x.group))];return <div className="admin-shell"><aside className="admin-sidebar"><div className="admin-brand"><Image src="/figma/app-logo.png" alt="FinWise" width={36} height={36}/><div><b>FinWise</b><small>PRO PLATFORM</small></div></div><nav>{groups.map(g=><div key={g}><h4>{g}</h4>{adminRoutes.filter(x=>x.group===g).map(x=><button className={x.id===route?"active":""} onClick={()=>go(x.id)} key={x.id}>{x.title}</button>)}</div>)}</nav><div className="admin-user"><span>FW</span><div><b>超级管理员</b><small>admin@finwise.com</small></div></div></aside><section className="admin-main"><header className="admin-top"><div className="admin-search">⌕ <input placeholder="搜索平台 KPI、交易或异常提醒..."/></div><div><button>通知 3</button><b>FinWise 运营中心</b><em>ONLINE</em></div></header><div className="admin-content"><div className="admin-title"><div><h1>{page.title}</h1><p>实时管理 FinWise 预测市场平台</p></div><div><button onClick={()=>notify("报表已生成")}>导出报表</button><button className="green-btn" onClick={()=>notify("操作已创建")}>＋ 新建</button></div></div>{route==="dashboard"?<Dashboard/>:<AdminModule route={route} title={page.title} notify={notify}/>}</div></section></div>}
+
+function Dashboard(){return <><div className="kpis">{[["今日新增注册","128","+12%"],["活跃交易用户","3,842","+4.2%"],["总交易量","$892,000","-1.5%"],["平台手续费收入","$12,600","+8.3%"]].map(([l,v,c])=><div key={l}><span>{l}</span><b>{v}</b><em className={c.startsWith("-")?"red":""}>{c} 对比上周同期</em></div>)}</div><div className="admin-charts"><Chart title="7天用户增长趋势"/><BarChart title="每日交易量 (百万美元)"/></div><div className="admin-bottom"><div className="admin-card"><SectionTitle title="最近运营警报" badge="3 条待处理"/>{["用户 ID 39021 进行了大额 KYC 升级申请","2026美国总统预测市场资金池异常波动","AI 预测引擎完成日终策略学习"].map(x=><p key={x}>● {x}<small>10分钟前</small></p>)}</div><div className="admin-card queue"><h3>系统待审核队列</h3><p>KYC 认证 <b>12 件</b></p><p>大额提现申请 <b>5 件</b></p><p>新预测市场审核 <b>8 件</b></p></div></div></>}
+function Chart({title}:{title:string}){return <div className="admin-card chart"><SectionTitle title={title} action="最近更新: 5分钟前"/><div className="chart-bars line">{[42,58,70,56,82,92,78].map((h,i)=><i key={i} style={{height:`${h}%`}}/>)}</div><div className="axis">周一　周二　周三　周四　周五　周六　周日</div></div>}
+function BarChart({title}:{title:string}){return <div className="admin-card chart"><SectionTitle title={title} action="本周总量 $8.92M"/><div className="chart-bars">{[34,52,78,69,45,88,61].map((h,i)=><i key={i} style={{height:`${h}%`}}/>)}</div><div className="axis">13日　14日　15日　16日　17日　18日　19日</div></div>}
+
+function AdminModule({route,title,notify}:{route:string;title:string;notify:(s:string)=>void}){const isForm=["market-create","campaign-edit","ops-config","settings"].includes(route);const isDashboard=["finance","deposit-monitor","ai-dashboard","risk"].includes(route);if(isForm)return <AdminForm title={title} notify={notify}/>;if(isDashboard)return <><div className="kpis">{[["今日处理","1,284","+8.4%"],["待处理","36","需关注"],["成功率","99.2%","稳定"],["累计金额","$2.8M","+12.6%"]].map(([l,v,c])=><div key={l}><span>{l}</span><b>{v}</b><em>{c}</em></div>)}</div><div className="admin-charts"><Chart title="近 7 日趋势"/><BarChart title="状态分布"/></div><AdminTable route={route} notify={notify}/></>;return <AdminTable route={route} notify={notify}/>}
+function AdminForm({title,notify}:{title:string;notify:(s:string)=>void}){return <div className="admin-card admin-form"><h2>{title}</h2><div className="form-grid">{["名称","所属分类","开始时间","结束时间","预算/额度","状态"].map(x=><label key={x}>{x}{x==="状态"?<select><option>启用</option><option>草稿</option></select>:<input placeholder={`请输入${x}`}/>}</label>)}</div><label>详细说明<textarea rows={6} placeholder="请输入内容与规则说明"/></label><div className="form-actions"><button>保存草稿</button><button className="green-btn" onClick={()=>notify(`${title}已保存`)}>发布并生效</button></div></div>}
+function AdminTable({route,notify}:{route:string;notify:(s:string)=>void}){const columns=useMemo(()=>route.includes("user")||route==="users"?["用户ID","账户","等级","资产","状态","注册时间"]:route.includes("market")||route==="trades"?["编号","市场名称","分类","交易量","参与人数","状态"]:route.includes("withdraw")||route.includes("deposit")||route==="finance"?["订单号","用户","币种","金额","网络","状态"]:["编号","名称/事件","负责人","创建时间","状态","操作"],[route]);const rows=Array.from({length:8},(_,i)=>[`FW${39020+i}`,i%2?"BTC 8月突破10万美元":"user***@example.com",i%3?"预测市场":"VIP ${i+1}",`$${(1280+i*376).toLocaleString()}`,i%4===0?"待审核":"正常","2026-07-${20+i}`]);return <div className="admin-card table-card"><div className="table-tools"><div className="admin-search">⌕ <input placeholder={`搜索${columns[1]}`}/></div><div className="filters"><button>全部状态⌄</button><button>最近 30 天⌄</button></div></div><div className="table-wrap"><table><thead><tr>{columns.map(c=><th key={c}>{c}</th>)}</tr></thead><tbody>{rows.map((r,i)=><tr key={i}>{r.slice(0,columns.length-1).map((c,j)=><td key={j}>{j===4?<span className={c==="待审核"?"status pending":"status"}>{c}</span>:c}</td>)}<td><button className="table-action" onClick={()=>notify(`已打开 ${r[0]} 详情`)}>查看</button> <button className="table-action" onClick={()=>notify("状态已更新")}>处理</button></td></tr>)}</tbody></table></div><div className="pagination"><span>共 128 条记录</span><div><button>‹</button><button className="active">1</button><button>2</button><button>3</button><button>›</button></div></div></div>}
