@@ -73,6 +73,13 @@ export const supabase = {
     async resetPasswordForEmail(email: string, options?: { redirectTo?: string }) {
       return request("/auth/v1/recover", { method: "POST", body: JSON.stringify({ email, redirect_to: options?.redirectTo }) });
     },
+    async signInWithOtp(email: string, options?: { redirectTo?: string }) {
+      const redirect = options?.redirectTo ? `?redirect_to=${encodeURIComponent(options.redirectTo)}` : "";
+      return request(`/auth/v1/otp${redirect}`, { method: "POST", body: JSON.stringify({ email, create_user: true }) });
+    },
+    async resendSignup(email: string) {
+      return request("/auth/v1/resend", { method: "POST", body: JSON.stringify({ type: "signup", email }) });
+    },
     async signOut() {
       await request("/auth/v1/logout", { method: "POST" }, true);
       save(null, "SIGNED_OUT");
