@@ -1,0 +1,21 @@
+services:
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    container_name: huiyuanzhushou-bot
+    env_file:
+      - .env
+    restart: unless-stopped
+    init: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,urllib.request; t=os.environ['TELEGRAM_BOT_TOKEN']; urllib.request.urlopen('https://api.telegram.org/bot'+t+'/getMe', timeout=8).read()\""]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
