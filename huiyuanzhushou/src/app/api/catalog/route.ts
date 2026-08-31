@@ -1,0 +1,57 @@
+import { NextRequest, NextResponse } from 'next/server';
+
+const url = process.env.SUPABASE_URL;
+const key = process.env.SUPABASE_PUBLISHABLE_KEY;
+
+async function sb(path: string) {
+  if (!url || !key) throw new Error('Missing Supabase environment variables');
+  const res = await fetch(`${url}/rest/v1/${path}`, {
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${key}`,
+    },
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function GET(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const siteId = searchParams.get('site_id');
+    const category = searchParams.get('category') || 'all';
+    const amount = Number(searchParams.get('amount') || 0);
+
+    const sites = await sb('member_sites?select=id,code,name&is_enabled=eq.true&order=sort_order.asc,name.asc');
+    if (!siteId) return NextResponse.json({ sites, promotions: [] });
+
+    const promotions = await sb(`member_promotions?select=id,title,summary,image_url,frontend_url,application_method,turnover_multiple,max_bonus,current_version&site_id=eq.${encodeURIComponent(siteId)}&status=eq.active&order=sort_order.asc,title.asc`);
+    if (!promotions.length) return NextResponse.json({ sites, promotions: [] });
+
+    const ids = promotions.map((p: { id: string }) => p.id).join(',');
+    const rules = await sb(`member_promotion_rules?select=promotion_id,category,min_amount,max_amount,bonus_type,bonus_value,bonus_cap,venue_codes,rule_json&promotion_id=in.(${ids})&is_enabled=eq.true`);
+
+    const matched = promotions.flatMap((promotion: Record<string, unknown>) => {
+      const promotionRules = rules.filter((rule: { promotion_id: string; category: string; min_amount: number | null; max_amount: number | null }) => {
+        if (rule.promotion_id !== promotion.id) return false;
+        if (rule.category !== 'all' && rule.category !== category) return false;
+        if (rule.min_amount !== null && amount < Number(rule.min_amount)) return false;
+        if (rule.max_amount !== null && amount > Number(rule.max_amount)) return false;
+        return true;
+      });
+
+      return promotionRules.map((rule: { bonus_type: string; bonus_value: number | null; bonus_cap: number | null; venue_codes: unknown; rule_json: unknown }) => {
+        let estimatedBonus: number | null = null;
+        if (rule.bonus_type === 'fixed') estimatedBonus = Number(rule.bonus_value || 0);
+        if (rule.bonus_type === 'percent') estimatedBonus = amount * Number(rule.bonus_value || 0) / 100;
+        if (estimatedBonus !== null && rule.bonus_cap !== null) estimatedBonus = Math.min(estimatedBonus, Number(rule.bonus_cap));
+        return { ...promotion, ...rule, estimated_bonus: estimatedBonus };
+      });
+    });
+
+    return NextResponse.json({ sites, promotions: matched });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
+  }
+}
