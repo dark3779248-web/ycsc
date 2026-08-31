@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 
 type Site = { id: string; code: string; name: string };
+type Venue = { id: string; site_id: string; category: string; code: string; name: string };
 type Promotion = {
   id: string;
   title: string;
@@ -20,6 +21,8 @@ const categories = [
 
 export default function Home() {
   const [sites, setSites] = useState<Site[]>([]);
+  const [venues, setVenues] = useState<Venue[]>([]);
+  const [selectedVenues, setSelectedVenues] = useState<string[]>([]);
   const [siteId, setSiteId] = useState('');
   const [amount, setAmount] = useState('1000');
   const [category, setCategory] = useState('all');
@@ -34,13 +37,39 @@ export default function Home() {
     }).catch(() => setMessage('站点加载失败，请稍后重试'));
   }, []);
 
+  useEffect(() => {
+    if (!siteId) {
+      setVenues([]);
+      setSelectedVenues([]);
+      return;
+    }
+    fetch(`/api/catalog?site_id=${encodeURIComponent(siteId)}&category=${encodeURIComponent(category)}&meta=1`)
+      .then(r => r.json())
+      .then(data => {
+        const nextVenues = data.venues || [];
+        setVenues(nextVenues);
+        setSelectedVenues(nextVenues.map((v: Venue) => v.code));
+      })
+      .catch(() => {
+        setVenues([]);
+        setSelectedVenues([]);
+      });
+  }, [siteId, category]);
+
+  function toggleVenue(code: string) {
+    setSelectedVenues(current => current.includes(code)
+      ? current.filter(v => v !== code)
+      : [...current, code]);
+  }
+
   async function query(e: FormEvent) {
     e.preventDefault();
     if (!siteId) return setMessage('请先选择站点');
     setLoading(true);
     setMessage('');
     try {
-      const r = await fetch(`/api/catalog?site_id=${encodeURIComponent(siteId)}&amount=${encodeURIComponent(amount)}&category=${encodeURIComponent(category)}`);
+      const venueParam = selectedVenues.join(',');
+      const r = await fetch(`/api/catalog?site_id=${encodeURIComponent(siteId)}&amount=${encodeURIComponent(amount)}&category=${encodeURIComponent(category)}&venues=${encodeURIComponent(venueParam)}`);
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || '查询失败');
       setResults(data.promotions || []);
@@ -57,13 +86,14 @@ export default function Home() {
       <section className="hero">
         <span className="eyebrow">MEMBER BENEFITS</span>
         <h1>会员福利助手</h1>
-        <p>不登录也可以查询。选择站点、金额和分类，快速查看当前可参与活动与预计彩金。</p>
+        <p>不登录也可以查询。选择站点、金额、分类和场馆，快速查看当前可参与活动与预计彩金。</p>
       </section>
 
       <form className="panel" onSubmit={query}>
         <label>站点<select value={siteId} onChange={e => setSiteId(e.target.value)}>{sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
         <label>金额<input inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder="请输入金额" /></label>
         <div><div className="label">分类</div><div className="chips">{categories.map(([value, label]) => <button type="button" key={value} className={category === value ? 'chip active' : 'chip'} onClick={() => setCategory(value)}>{label}</button>)}</div></div>
+        {venues.length > 0 && <div><div className="label">场馆</div><div className="chips">{venues.map(v => <button type="button" key={v.id} className={selectedVenues.includes(v.code) ? 'chip active' : 'chip'} onClick={() => toggleVenue(v.code)}>{v.name}</button>)}</div></div>}
         <button className="primary" disabled={loading}>{loading ? '查询中…' : '查询可参与活动'}</button>
       </form>
 
