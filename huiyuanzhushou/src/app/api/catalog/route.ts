@@ -22,22 +22,37 @@ export async function GET(req: NextRequest) {
     const siteId = searchParams.get('site_id');
     const category = searchParams.get('category') || 'all';
     const amount = Number(searchParams.get('amount') || 0);
+    const metaOnly = searchParams.get('meta') === '1';
+    const selectedVenues = (searchParams.get('venues') || '')
+      .split(',')
+      .map(v => v.trim())
+      .filter(Boolean);
 
     const sites = await sb('member_sites?select=id,code,name&is_enabled=eq.true&order=sort_order.asc,name.asc');
-    if (!siteId) return NextResponse.json({ sites, promotions: [] });
+    if (!siteId) return NextResponse.json({ sites, venues: [], promotions: [] });
+
+    const venueCategoryFilter = category === 'all' ? '' : `&category=in.(all,${encodeURIComponent(category)})`;
+    const venues = await sb(`member_venues?select=id,site_id,category,code,name&site_id=eq.${encodeURIComponent(siteId)}&is_enabled=eq.true${venueCategoryFilter}&order=sort_order.asc,name.asc`);
+
+    if (metaOnly) return NextResponse.json({ sites, venues, promotions: [] });
 
     const promotions = await sb(`member_promotions?select=id,title,summary,image_url,frontend_url,application_method,turnover_multiple,max_bonus,current_version&site_id=eq.${encodeURIComponent(siteId)}&status=eq.active&order=sort_order.asc,title.asc`);
-    if (!promotions.length) return NextResponse.json({ sites, promotions: [] });
+    if (!promotions.length) return NextResponse.json({ sites, venues, promotions: [] });
 
     const ids = promotions.map((p: { id: string }) => p.id).join(',');
     const rules = await sb(`member_promotion_rules?select=promotion_id,category,min_amount,max_amount,bonus_type,bonus_value,bonus_cap,venue_codes,rule_json&promotion_id=in.(${ids})&is_enabled=eq.true`);
 
     const matched = promotions.flatMap((promotion: Record<string, unknown>) => {
-      const promotionRules = rules.filter((rule: { promotion_id: string; category: string; min_amount: number | null; max_amount: number | null }) => {
+      const promotionRules = rules.filter((rule: { promotion_id: string; category: string; min_amount: number | null; max_amount: number | null; venue_codes?: unknown }) => {
         if (rule.promotion_id !== promotion.id) return false;
-        if (rule.category !== 'all' && rule.category !== category) return false;
+        if (category !== 'all' && rule.category !== 'all' && rule.category !== category) return false;
         if (rule.min_amount !== null && amount < Number(rule.min_amount)) return false;
         if (rule.max_amount !== null && amount > Number(rule.max_amount)) return false;
+
+        const ruleVenues = Array.isArray(rule.venue_codes)
+          ? rule.venue_codes.map(String)
+          : [];
+        if (selectedVenues.length && ruleVenues.length && !selectedVenues.some(v => ruleVenues.includes(v))) return false;
         return true;
       });
 
@@ -50,7 +65,7 @@ export async function GET(req: NextRequest) {
       });
     });
 
-    return NextResponse.json({ sites, promotions: matched });
+    return NextResponse.json({ sites, venues, promotions: matched });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
   }
