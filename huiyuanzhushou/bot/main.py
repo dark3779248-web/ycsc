@@ -1,75 +1,707 @@
 import logging
+import math
 import os
 from typing import Any
+
 import httpx
 from dotenv import load_dotenv
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
-load_dotenv(); TOKEN=os.environ['TELEGRAM_BOT_TOKEN']; URL=os.environ['SUPABASE_URL'].rstrip('/'); KEY=os.environ['SUPABASE_SERVICE_ROLE_KEY']; CATALOG=os.getenv('CATALOG_API_URL','https://huiyuanzhushou.vercel.app/api/catalog')
-logging.basicConfig(level=logging.INFO); log=logging.getLogger('huiyuanzhushou-bot')
-CATS=[('all','全站'),('sports','体育'),('live','真人'),('esports','电竞'),('chess','棋牌'),('slots','电子'),('entertainment','娱乐'),('lottery','彩票')]; CN=dict(CATS)
-async def sb(path,params=None):
- async with httpx.AsyncClient(timeout=15) as c:
-  r=await c.get(f'{URL}/rest/v1/{path}',headers={'apikey':KEY,'Authorization':f'Bearer {KEY}'},params=params); r.raise_for_status(); return r.json()
-async def get_sites(): return await sb('member_sites',{'select':'id,code,name','is_enabled':'eq.true','order':'sort_order.asc,name.asc'})
-async def api(params):
- async with httpx.AsyncClient(timeout=20) as c: r=await c.get(CATALOG,params=params); r.raise_for_status(); return r.json()
-async def get_accounts(tid):
- ch=await sb('member_contact_channels',{'select':'user_id','channel_type':'eq.telegram','external_account_id':f'eq.{tid}','is_enabled':'eq.true','limit':'1'})
- if not ch:return []
- aa=await sb('member_site_accounts',{'select':'id,site_id,account_name,vip_level,is_starred','user_id':f"eq.{ch[0]['user_id']}",'is_enabled':'eq.true'}); sm={s['id']:s for s in await get_sites()}; return [{**a,'site':sm[a['site_id']]} for a in aa if a['site_id'] in sm]
-def text(d):
- names=[v['name'] for v in d.get('venues',[]) if str(v['code']) in d.get('selected',set())]; venue='、'.join(names) if names else '不限场馆'; vip=f" · VIP{d['vip']}" if d.get('vip') is not None else ''
- return f"🔎 福利活动查询\n\n👤 账户：{d.get('account') or '临时查询'}{vip}\n🏢 站点：{d.get('site_name','请选择')}\n💰 金额：{d.get('amount',1000):,.0f}\n💳 类型：{'充值' if d.get('basis')=='deposit' else '投注'}\n🎮 分类：{CN.get(d.get('category','all'))}\n🏟 场馆：{venue}\n\n修改条件后，直接点击查询。"
-def panel(d):
- mark=lambda s,on:('✓ '+s if on else s); a=d.get('amount',1000); b=d.get('basis','bet'); cat=d.get('category','all'); rows=[[InlineKeyboardButton('👤 会员账户 / 站点',callback_data='source')],[InlineKeyboardButton(mark('100',a==100),callback_data='a:100'),InlineKeyboardButton(mark('1,000',a==1000),callback_data='a:1000'),InlineKeyboardButton(mark('10,000',a==10000),callback_data='a:10000'),InlineKeyboardButton(mark('100,000',a==100000),callback_data='a:100000')],[InlineKeyboardButton('✏️ 自定义金额',callback_data='custom')],[InlineKeyboardButton(mark('投注',b=='bet'),callback_data='b:bet'),InlineKeyboardButton(mark('充值',b=='deposit'),callback_data='b:deposit')]]
- for i in range(0,8,4):rows.append([InlineKeyboardButton(mark(n,cat==v),callback_data='c:'+v) for v,n in CATS[i:i+4]])
- rows += [[InlineKeyboardButton(f"🏟 选择场馆（{len(d.get('selected',set())) or '不限'}）",callback_data='venues')],[InlineKeyboardButton('🔍 查询符合活动',callback_data='go')]]; return InlineKeyboardMarkup(rows)
-def source_kb(d):
- rows=[[InlineKeyboardButton(f"⭐ {a['site']['name']} · {a.get('account_name') or '会员'} · VIP{a.get('vip_level','-')}",callback_data='acct:'+a['id'])] for a in d.get('accounts',{}).values()]; rows += [[InlineKeyboardButton('临时 · '+s['name'],callback_data='site:'+s['id'])] for s in d.get('sites',{}).values()]; rows.append([InlineKeyboardButton('⬅️ 返回',callback_data='panel')]); return InlineKeyboardMarkup(rows)
-def venue_kb(d):
- vs=d.get('venues',[]); sel=d.get('selected',set()); rows=[[InlineKeyboardButton('全选',callback_data='vall'),InlineKeyboardButton('全不选',callback_data='vnone')]]
- for i in range(0,len(vs),2):rows.append([InlineKeyboardButton(('✅ ' if str(v['code']) in sel else '▫️ ')+v['name'],callback_data='v:'+str(v['code'])) for v in vs[i:i+2]])
- rows.append([InlineKeyboardButton('✅ 完成',callback_data='panel')]); return InlineKeyboardMarkup(rows)
-async def load_venues(d):
- r=await api({'site_id':d['site_id'],'category':d.get('category','all'),'meta':1}); d['venues']=r.get('venues') or []; d['selected']=set()
-async def show(q,d): await q.edit_message_text(text(d),reply_markup=panel(d))
-async def start(u:Update,c:ContextTypes.DEFAULT_TYPE):
- c.user_data.clear(); ss=await get_sites(); aa=await get_accounts(u.effective_user.id); d=c.user_data; d.update({'sites':{x['id']:x for x in ss},'accounts':{x['id']:x for x in aa},'amount':1000,'basis':'bet','category':'all','vip':None,'selected':set()})
- if aa:a=aa[0];d.update({'site_id':a['site_id'],'site_name':a['site']['name'],'account':a.get('account_name'),'vip':a.get('vip_level')})
- elif ss:s=ss[0];d.update({'site_id':s['id'],'site_name':s['name'],'account':None})
- else:await u.effective_message.reply_text('目前还没有启用的站点。');return
- await load_venues(d);await u.effective_message.reply_text(text(d),reply_markup=panel(d))
-async def callback(u:Update,c:ContextTypes.DEFAULT_TYPE):
- q=u.callback_query;await q.answer();x=q.data;d=c.user_data
- if x=='panel':await show(q,d)
- elif x=='source':await q.edit_message_text('选择会员账户或临时站点：',reply_markup=source_kb(d))
- elif x.startswith('acct:'):
-  a=d['accounts'][x[5:]];d.update({'site_id':a['site_id'],'site_name':a['site']['name'],'account':a.get('account_name'),'vip':a.get('vip_level')});await load_venues(d);await show(q,d)
- elif x.startswith('site:'):
-  s=d['sites'][x[5:]];d.update({'site_id':s['id'],'site_name':s['name'],'account':None,'vip':None});await load_venues(d);await show(q,d)
- elif x.startswith('a:'):d['amount']=float(x[2:]);await show(q,d)
- elif x=='custom':d['waiting']=True;await q.edit_message_text('请输入自定义金额，例如：1500')
- elif x.startswith('b:'):d['basis']=x[2:];await show(q,d)
- elif x.startswith('c:'):d['category']=x[2:];await load_venues(d);await show(q,d)
- elif x=='venues':await q.edit_message_text('选择场馆（可多选；全不选 = 不限制）：',reply_markup=venue_kb(d))
- elif x=='vall':d['selected']={str(v['code']) for v in d['venues']};await q.edit_message_reply_markup(reply_markup=venue_kb(d))
- elif x=='vnone':d['selected']=set();await q.edit_message_reply_markup(reply_markup=venue_kb(d))
- elif x.startswith('v:'):
-  z=x[2:];s=set(d['selected']);s.remove(z) if z in s else s.add(z);d['selected']=s;await q.edit_message_reply_markup(reply_markup=venue_kb(d))
- elif x=='go':await query(q,d)
-async def amount(u:Update,c:ContextTypes.DEFAULT_TYPE):
- if not c.user_data.get('waiting'):return
- try:n=float(u.effective_message.text.replace(',',''));assert n>0
- except:await u.effective_message.reply_text('请输入大于0的数字');return
- c.user_data['amount']=n;c.user_data['waiting']=False;await u.effective_message.reply_text(text(c.user_data),reply_markup=panel(c.user_data))
-async def query(q,d):
- p={'site_id':d['site_id'],'amount':d['amount'],'amount_basis':d['basis'],'category':d['category']};
- if d.get('vip') is not None:p['vip']=d['vip']
- if d['selected']:p['venues']=','.join(d['selected'])
- r=await api(p);ps=r.get('promotions') or []
- out='没有找到符合当前条件的活动。' if not ps else '\n\n'.join([f"{i}. {x.get('title')}\n预计彩金：{float(x['estimated_bonus']):,.2f}"+(f"\n{x.get('summary')}" if x.get('summary') else '') for i,x in enumerate(ps,1)])
- await q.edit_message_text(out,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ 返回查询面板',callback_data='panel')]]))
-def main():
- a=Application.builder().token(TOKEN).build();a.add_handler(CommandHandler('start',start));a.add_handler(CallbackQueryHandler(callback));a.add_handler(MessageHandler(filters.TEXT&~filters.COMMAND,amount));a.run_polling(drop_pending_updates=True)
-if __name__=='__main__':main()
+from telegram import ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import BadRequest, TelegramError
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
+
+load_dotenv()
+
+TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+CATALOG_API_URL = os.getenv(
+    "CATALOG_API_URL",
+    "https://huiyuanzhushou.vercel.app/api/catalog",
+).rstrip("/")
+
+logging.basicConfig(
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    level=logging.INFO,
+)
+log = logging.getLogger("huiyuanzhushou-bot")
+
+CATEGORIES = [
+    ("all", "全站"),
+    ("sports", "体育"),
+    ("live", "真人"),
+    ("esports", "电竞"),
+    ("chess", "棋牌"),
+    ("slots", "电子"),
+    ("entertainment", "娱乐"),
+    ("lottery", "彩票"),
+]
+CATEGORY_NAMES = dict(CATEGORIES)
+QUICK_AMOUNTS = [100, 1_000, 10_000, 100_000]
+
+
+async def sb_get(path: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.get(
+            f"{SUPABASE_URL}/rest/v1/{path}",
+            headers={
+                "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+            },
+            params=params,
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+async def get_sites() -> list[dict[str, Any]]:
+    return await sb_get(
+        "member_sites",
+        {
+            "select": "id,code,name",
+            "is_enabled": "eq.true",
+            "order": "sort_order.asc,name.asc",
+        },
+    )
+
+
+async def fetch_catalog(params: dict[str, Any]) -> dict[str, Any]:
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.get(CATALOG_API_URL, params=params)
+        response.raise_for_status()
+        return response.json()
+
+
+async def get_accounts(telegram_id: int) -> list[dict[str, Any]]:
+    channels = await sb_get(
+        "member_contact_channels",
+        {
+            "select": "user_id",
+            "channel_type": "eq.telegram",
+            "external_account_id": f"eq.{telegram_id}",
+            "is_enabled": "eq.true",
+            "limit": "1",
+        },
+    )
+    if not channels:
+        return []
+
+    accounts = await sb_get(
+        "member_site_accounts",
+        {
+            "select": "id,site_id,account_name,vip_level,is_starred",
+            "user_id": f"eq.{channels[0]['user_id']}",
+            "is_enabled": "eq.true",
+            "order": "is_starred.desc,updated_at.desc",
+        },
+    )
+    site_map = {site["id"]: site for site in await get_sites()}
+    return [
+        {**account, "site": site_map[account["site_id"]]}
+        for account in accounts
+        if account.get("site_id") in site_map
+    ]
+
+
+def format_amount(value: float | int) -> str:
+    number = float(value)
+    if number.is_integer():
+        return f"{number:,.0f}"
+    return f"{number:,.2f}".rstrip("0").rstrip(".")
+
+
+def selected_venue_names(data: dict[str, Any]) -> list[str]:
+    selected = set(data.get("selected") or set())
+    return [
+        venue["name"]
+        for venue in data.get("venues") or []
+        if str(venue["code"]) in selected
+    ]
+
+
+def panel_text(data: dict[str, Any]) -> str:
+    names = selected_venue_names(data)
+    venue_text = "、".join(names) if names else "不限场馆"
+    vip = f" · VIP{data['vip']}" if data.get("vip") is not None else ""
+    prompt = ""
+    if data.get("waiting_amount"):
+        prompt = "\n\n✍️ 请直接在下方输入金额，例如：9000"
+
+    return (
+        "🔎 福利活动查询\n\n"
+        f"👤 账户：{data.get('account') or '临时查询'}{vip}\n"
+        f"🏢 站点：{data.get('site_name', '请选择')}\n"
+        f"💰 金额：{format_amount(data.get('amount', 1_000))}\n"
+        f"💳 类型：{'充值' if data.get('basis') == 'deposit' else '投注'}\n"
+        f"🎮 分类：{CATEGORY_NAMES.get(data.get('category', 'all'), '全站')}\n"
+        f"🏟 场馆：{venue_text}\n\n"
+        "修改条件后，直接点击查询。"
+        f"{prompt}"
+    )
+
+
+def option_button(
+    label: str,
+    callback_data: str,
+    *,
+    selected: bool = False,
+    style: str | None = None,
+) -> InlineKeyboardButton:
+    if selected and not label.startswith("✓ "):
+        label = f"✓ {label}"
+    return InlineKeyboardButton(
+        label,
+        callback_data=callback_data,
+        style=style or ("primary" if selected else None),
+    )
+
+
+def main_panel(data: dict[str, Any]) -> InlineKeyboardMarkup:
+    amount = float(data.get("amount", 1_000))
+    amount_mode = data.get("amount_mode", "quick")
+    basis = data.get("basis", "bet")
+    category = data.get("category", "all")
+    selected = set(data.get("selected") or set())
+
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton("👤 会员账户 / 站点", callback_data="source")],
+        [
+            option_button(
+                format_amount(value),
+                f"a:{value}",
+                selected=amount_mode == "quick" and amount == value,
+            )
+            for value in QUICK_AMOUNTS
+        ],
+    ]
+
+    custom_label = "✏️ 自定义金额"
+    if amount_mode == "custom":
+        custom_label = f"✏️ 自定义金额：{format_amount(amount)}"
+    rows.append(
+        [
+            option_button(
+                custom_label,
+                "custom",
+                selected=amount_mode == "custom",
+            )
+        ]
+    )
+    rows.append(
+        [
+            option_button("投注", "b:bet", selected=basis == "bet"),
+            option_button("充值", "b:deposit", selected=basis == "deposit"),
+        ]
+    )
+
+    for index in range(0, len(CATEGORIES), 4):
+        rows.append(
+            [
+                option_button(name, f"c:{value}", selected=category == value)
+                for value, name in CATEGORIES[index:index + 4]
+            ]
+        )
+
+    venue_label = (
+        f"🏟 场馆（已选 {len(selected)} 个）"
+        if selected
+        else "🏟 选择场馆（不限）"
+    )
+    rows.extend(
+        [
+            [option_button(venue_label, "venues", selected=bool(selected))],
+            [InlineKeyboardButton("🔍 查询符合活动", callback_data="go")],
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
+
+
+def source_keyboard(data: dict[str, Any]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    current_account_id = data.get("account_id")
+
+    for account in (data.get("accounts") or {}).values():
+        star = "⭐ " if account.get("is_starred") else ""
+        vip = account.get("vip_level")
+        vip_text = f"VIP{vip}" if vip is not None else "VIP未设置"
+        rows.append(
+            [
+                option_button(
+                    f"{star}{account['site']['name']} · "
+                    f"{account.get('account_name') or '会员'} · {vip_text}",
+                    f"acct:{account['id']}",
+                    selected=current_account_id == account["id"],
+                )
+            ]
+        )
+
+    for site in (data.get("sites") or {}).values():
+        rows.append(
+            [
+                option_button(
+                    f"临时 · {site['name']}",
+                    f"site:{site['id']}",
+                    selected=(
+                        current_account_id is None
+                        and data.get("site_id") == site["id"]
+                    ),
+                )
+            ]
+        )
+
+    rows.append([InlineKeyboardButton("⬅️ 返回", callback_data="panel")])
+    return InlineKeyboardMarkup(rows)
+
+
+def venue_panel_text(data: dict[str, Any]) -> str:
+    venues = data.get("venues") or []
+    selected = set(data.get("selected") or set())
+    if not selected:
+        status = "当前：不限场馆"
+    else:
+        status = f"当前已选 {len(selected)} / {len(venues)} 个场馆"
+    return (
+        "🏟 选择场馆（支持多选）\n\n"
+        f"{status}\n"
+        "点击场馆可选中，再次点击可取消。"
+    )
+
+
+def venue_keyboard(data: dict[str, Any]) -> InlineKeyboardMarkup:
+    venues = data.get("venues") or []
+    selected = set(data.get("selected") or set())
+    all_codes = {str(venue["code"]) for venue in venues}
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            option_button("不限场馆", "vnone", selected=not selected),
+            option_button(
+                "全选",
+                "vall",
+                selected=bool(all_codes) and selected == all_codes,
+            ),
+        ]
+    ]
+
+    for index in range(0, len(venues), 2):
+        row: list[InlineKeyboardButton] = []
+        for venue in venues[index:index + 2]:
+            code = str(venue["code"])
+            row.append(
+                option_button(
+                    venue["name"],
+                    f"v:{code}",
+                    selected=code in selected,
+                )
+            )
+        rows.append(row)
+
+    rows.append([InlineKeyboardButton("✅ 完成", callback_data="panel")])
+    return InlineKeyboardMarkup(rows)
+
+
+def toggle_venue(data: dict[str, Any], code: str) -> None:
+    selected = set(data.get("selected") or set())
+    if code in selected:
+        selected.remove(code)
+    else:
+        selected.add(code)
+    data["selected"] = selected
+
+
+def build_query_params(data: dict[str, Any]) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "site_id": data["site_id"],
+        "amount": data["amount"],
+        "amount_basis": data.get("basis", "bet"),
+        "category": data.get("category", "all"),
+    }
+    if data.get("vip") is not None:
+        params["vip"] = data["vip"]
+    selected = sorted(set(data.get("selected") or set()))
+    if selected:
+        params["venues"] = ",".join(selected)
+    return params
+
+
+async def load_venues(data: dict[str, Any]) -> None:
+    result = await fetch_catalog(
+        {
+            "site_id": data["site_id"],
+            "category": data.get("category", "all"),
+            "meta": 1,
+        }
+    )
+    data["venues"] = result.get("venues") or []
+    data["selected"] = set()
+
+
+def remember_panel(data: dict[str, Any], message: Any) -> None:
+    data["panel_chat_id"] = message.chat_id
+    data["panel_message_id"] = message.message_id
+
+
+async def delete_message_safely(bot: Any, chat_id: int, message_id: int | None) -> None:
+    if not message_id:
+        return
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except TelegramError:
+        log.debug("Could not delete message %s", message_id, exc_info=True)
+
+
+async def clear_amount_prompt(
+    context: ContextTypes.DEFAULT_TYPE,
+    data: dict[str, Any],
+) -> None:
+    chat_id = data.get("panel_chat_id")
+    prompt_id = data.pop("amount_prompt_message_id", None)
+    data["waiting_amount"] = False
+    if chat_id and prompt_id:
+        await delete_message_safely(context.bot, chat_id, prompt_id)
+
+
+async def edit_query_message(
+    query: Any,
+    text: str,
+    reply_markup: InlineKeyboardMarkup,
+) -> None:
+    try:
+        await query.edit_message_text(text, reply_markup=reply_markup)
+    except BadRequest as error:
+        if "Message is not modified" not in str(error):
+            raise
+
+
+async def show_main_panel(query: Any, data: dict[str, Any]) -> None:
+    data["waiting_amount"] = False
+    await edit_query_message(query, panel_text(data), main_panel(data))
+    if query.message:
+        remember_panel(data, query.message)
+
+
+async def show_venue_panel(query: Any, data: dict[str, Any]) -> None:
+    await edit_query_message(
+        query,
+        venue_panel_text(data),
+        venue_keyboard(data),
+    )
+    if query.message:
+        remember_panel(data, query.message)
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.clear()
+    user = update.effective_user
+    message = update.effective_message
+    if not user or not message:
+        return
+
+    try:
+        sites = await get_sites()
+        accounts = await get_accounts(user.id)
+    except Exception:
+        log.exception("Failed to load sites or member accounts")
+        await message.reply_text("读取会员资料失败，请稍后再试。")
+        return
+
+    data = context.user_data
+    data.update(
+        {
+            "sites": {site["id"]: site for site in sites},
+            "accounts": {account["id"]: account for account in accounts},
+            "amount": 1_000.0,
+            "amount_mode": "quick",
+            "basis": "bet",
+            "category": "all",
+            "vip": None,
+            "selected": set(),
+            "waiting_amount": False,
+        }
+    )
+
+    if accounts:
+        account = accounts[0]
+        data.update(
+            {
+                "account_id": account["id"],
+                "site_id": account["site_id"],
+                "site_name": account["site"]["name"],
+                "account": account.get("account_name"),
+                "vip": account.get("vip_level"),
+            }
+        )
+    elif sites:
+        site = sites[0]
+        data.update(
+            {
+                "account_id": None,
+                "site_id": site["id"],
+                "site_name": site["name"],
+                "account": None,
+            }
+        )
+    else:
+        await message.reply_text("目前还没有启用的站点。")
+        return
+
+    try:
+        await load_venues(data)
+    except Exception:
+        log.exception("Failed to load venues during start")
+        data["venues"] = []
+        data["selected"] = set()
+
+    sent = await message.reply_text(panel_text(data), reply_markup=main_panel(data))
+    remember_panel(data, sent)
+
+
+async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.message:
+        return
+
+    await query.answer()
+    action = query.data or ""
+    data = context.user_data
+    remember_panel(data, query.message)
+
+    try:
+        if action != "custom" and data.get("waiting_amount"):
+            await clear_amount_prompt(context, data)
+
+        if action == "panel":
+            await show_main_panel(query, data)
+            return
+
+        if action == "source":
+            await query.edit_message_text(
+                "选择会员账户或临时站点：",
+                reply_markup=source_keyboard(data),
+            )
+            return
+
+        if action.startswith("acct:"):
+            account = (data.get("accounts") or {}).get(action[5:])
+            if not account:
+                await query.edit_message_text("会员账户已失效，请发送 /start 重新读取。")
+                return
+            data.update(
+                {
+                    "account_id": account["id"],
+                    "site_id": account["site_id"],
+                    "site_name": account["site"]["name"],
+                    "account": account.get("account_name"),
+                    "vip": account.get("vip_level"),
+                }
+            )
+            await load_venues(data)
+            await show_main_panel(query, data)
+            return
+
+        if action.startswith("site:"):
+            site = (data.get("sites") or {}).get(action[5:])
+            if not site:
+                await query.edit_message_text("站点已失效，请发送 /start 重新读取。")
+                return
+            data.update(
+                {
+                    "account_id": None,
+                    "site_id": site["id"],
+                    "site_name": site["name"],
+                    "account": None,
+                    "vip": None,
+                }
+            )
+            await load_venues(data)
+            await show_main_panel(query, data)
+            return
+
+        if action.startswith("a:"):
+            data["amount"] = float(action[2:])
+            data["amount_mode"] = "quick"
+            await show_main_panel(query, data)
+            return
+
+        if action == "custom":
+            await clear_amount_prompt(context, data)
+            data["waiting_amount"] = True
+            await edit_query_message(
+                query,
+                panel_text(data),
+                main_panel(data),
+            )
+            prompt = await query.message.reply_text(
+                "✍️ 请输入自定义金额，例如：9000",
+                reply_markup=ForceReply(
+                    selective=True,
+                    input_field_placeholder="请输入金额",
+                ),
+            )
+            data["amount_prompt_message_id"] = prompt.message_id
+            return
+
+        if action.startswith("b:"):
+            data["basis"] = action[2:]
+            await show_main_panel(query, data)
+            return
+
+        if action.startswith("c:"):
+            next_category = action[2:]
+            if next_category != data.get("category"):
+                data["category"] = next_category
+                await load_venues(data)
+            await show_main_panel(query, data)
+            return
+
+        if action == "venues":
+            await show_venue_panel(query, data)
+            return
+
+        if action == "vall":
+            data["selected"] = {
+                str(venue["code"]) for venue in data.get("venues") or []
+            }
+            await show_venue_panel(query, data)
+            return
+
+        if action == "vnone":
+            data["selected"] = set()
+            await show_venue_panel(query, data)
+            return
+
+        if action.startswith("v:"):
+            toggle_venue(data, action[2:])
+            await show_venue_panel(query, data)
+            return
+
+        if action == "go":
+            await run_query(query, data)
+    except Exception:
+        log.exception("Callback failed: %s", action)
+        await query.edit_message_text(
+            "操作失败，请稍后重试。",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("⬅️ 返回查询面板", callback_data="panel")]]
+            ),
+        )
+
+
+async def custom_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    data = context.user_data
+    message = update.effective_message
+    if not data.get("waiting_amount") or not message or not message.text:
+        return
+
+    raw_value = message.text.replace(",", "").strip()
+    try:
+        amount = float(raw_value)
+        if amount <= 0 or not math.isfinite(amount):
+            raise ValueError
+    except ValueError:
+        chat_id = data.get("panel_chat_id") or message.chat_id
+        old_prompt_id = data.pop("amount_prompt_message_id", None)
+        await delete_message_safely(context.bot, chat_id, old_prompt_id)
+        await delete_message_safely(context.bot, chat_id, message.message_id)
+        prompt = await context.bot.send_message(
+            chat_id=chat_id,
+            text="金额格式不正确，请输入大于 0 的数字，例如：9000",
+            reply_markup=ForceReply(
+                selective=True,
+                input_field_placeholder="请输入金额",
+            ),
+        )
+        data["amount_prompt_message_id"] = prompt.message_id
+        return
+
+    data["amount"] = amount
+    data["amount_mode"] = "custom"
+    data["waiting_amount"] = False
+
+    chat_id = data.get("panel_chat_id") or message.chat_id
+    panel_message_id = data.get("panel_message_id")
+    panel_updated = False
+    if panel_message_id:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=panel_message_id,
+                text=panel_text(data),
+                reply_markup=main_panel(data),
+            )
+            panel_updated = True
+        except BadRequest as error:
+            if "Message is not modified" in str(error):
+                panel_updated = True
+            else:
+                log.warning("Could not update stored query panel: %s", error)
+
+    if not panel_updated:
+        sent = await message.reply_text(panel_text(data), reply_markup=main_panel(data))
+        remember_panel(data, sent)
+
+    prompt_id = data.pop("amount_prompt_message_id", None)
+    await delete_message_safely(context.bot, chat_id, prompt_id)
+    await delete_message_safely(context.bot, chat_id, message.message_id)
+
+
+async def run_query(query: Any, data: dict[str, Any]) -> None:
+    params = build_query_params(data)
+    await query.edit_message_text("正在查询活动…")
+
+    try:
+        result = await fetch_catalog(params)
+        promotions = result.get("promotions") or []
+    except Exception:
+        log.exception("Catalog query failed")
+        await query.edit_message_text(
+            "查询失败，请稍后重试。",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("⬅️ 返回查询面板", callback_data="panel")]]
+            ),
+        )
+        return
+
+    if not promotions:
+        output = "没有找到符合当前条件的活动。"
+    else:
+        blocks: list[str] = []
+        for index, promotion in enumerate(promotions[:10], 1):
+            estimated = promotion.get("estimated_bonus")
+            estimated_text = (
+                format_amount(float(estimated)) if estimated is not None else "待规则确认"
+            )
+            block = f"{index}. {promotion.get('title', '未命名活动')}\n预计彩金：{estimated_text}"
+            if promotion.get("summary"):
+                block += f"\n{promotion['summary']}"
+            blocks.append(block)
+        output = "\n\n".join(blocks)
+        if len(promotions) > 10:
+            output += f"\n\n另有 {len(promotions) - 10} 个活动未展开。"
+
+    await query.edit_message_text(
+        output[:3900],
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("⬅️ 返回查询面板", callback_data="panel")]]
+        ),
+    )
+
+
+def main() -> None:
+    application = Application.builder().token(TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(callback))
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, custom_amount)
+    )
+    log.info("Bot started with long polling")
+    application.run_polling(drop_pending_updates=True)
+
+
+if __name__ == "__main__":
+    main()
