@@ -1,0 +1,35 @@
+name: Member Assistant Check
+
+on:
+  push:
+    branches: ["feature/member-assistant-bootstrap"]
+    paths:
+      - "member-assistant-app/**"
+      - ".github/workflows/member-assistant-check.yml"
+  pull_request:
+    paths:
+      - "member-assistant-app/**"
+      - ".github/workflows/member-assistant-check.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: member-assistant-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: member-assistant-app/package-lock.json
+      - run: npm install
+      - run: npm run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://pefunmkcrofwmgurlktn.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder
+          SUPABASE_SERVICE_ROLE_KEY: ci-placeholder
+          TELEGRAM_BOT_TOKEN: ci-placeholder
+          TELEGRAM_WEBHOOK_SECRET: ci-placeholder
+          NEXT_PUBLIC_APP_URL: http://localhost:3000
