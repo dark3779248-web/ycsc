@@ -23,6 +23,8 @@ export async function GET(req: NextRequest) {
     const category = searchParams.get('category') || 'all';
     const amount = Number(searchParams.get('amount') || 0);
     const amountBasis = searchParams.get('amount_basis') === 'deposit' ? 'deposit' : 'bet';
+    const vipParam = searchParams.get('vip');
+    const vip = vipParam === null || vipParam === '' ? null : Number(vipParam);
     const metaOnly = searchParams.get('meta') === '1';
     const selectedVenues = (searchParams.get('venues') || '')
       .split(',')
@@ -41,15 +43,19 @@ export async function GET(req: NextRequest) {
     if (!promotions.length) return NextResponse.json({ sites, venues, promotions: [] });
 
     const ids = promotions.map((p: { id: string }) => p.id).join(',');
-    const rules = await sb(`member_promotion_rules?select=promotion_id,category,min_amount,max_amount,amount_basis,bonus_type,bonus_value,bonus_cap,venue_codes,rule_json&promotion_id=in.(${ids})&is_enabled=eq.true`);
+    const rules = await sb(`member_promotion_rules?select=promotion_id,category,min_amount,max_amount,amount_basis,bonus_type,bonus_value,bonus_cap,vip_min,vip_max,venue_codes,rule_json&promotion_id=in.(${ids})&is_enabled=eq.true`);
 
     const matched = promotions.flatMap((promotion: Record<string, unknown>) => {
-      const promotionRules = rules.filter((rule: { promotion_id: string; category: string; min_amount: number | null; max_amount: number | null; amount_basis?: string; venue_codes?: unknown }) => {
+      const promotionRules = rules.filter((rule: { promotion_id: string; category: string; min_amount: number | null; max_amount: number | null; amount_basis?: string; vip_min?: number | null; vip_max?: number | null; venue_codes?: unknown }) => {
         if (rule.promotion_id !== promotion.id) return false;
         if ((rule.amount_basis || 'bet') !== amountBasis) return false;
         if (category !== 'all' && rule.category !== 'all' && rule.category !== category) return false;
         if (rule.min_amount !== null && amount < Number(rule.min_amount)) return false;
         if (rule.max_amount !== null && amount > Number(rule.max_amount)) return false;
+        if (vip !== null && Number.isFinite(vip)) {
+          if (rule.vip_min !== null && rule.vip_min !== undefined && vip < Number(rule.vip_min)) return false;
+          if (rule.vip_max !== null && rule.vip_max !== undefined && vip > Number(rule.vip_max)) return false;
+        }
 
         const ruleVenues = Array.isArray(rule.venue_codes)
           ? rule.venue_codes.map(String)
@@ -58,7 +64,7 @@ export async function GET(req: NextRequest) {
         return true;
       });
 
-      return promotionRules.map((rule: { amount_basis?: string; bonus_type: string; bonus_value: number | null; bonus_cap: number | null; venue_codes: unknown; rule_json: unknown }) => {
+      return promotionRules.map((rule: { amount_basis?: string; bonus_type: string; bonus_value: number | null; bonus_cap: number | null; vip_min?: number | null; vip_max?: number | null; venue_codes: unknown; rule_json: unknown }) => {
         let estimatedBonus: number | null = null;
         if (rule.bonus_type === 'fixed') estimatedBonus = Number(rule.bonus_value || 0);
         if (rule.bonus_type === 'percent') estimatedBonus = amount * Number(rule.bonus_value || 0) / 100;
@@ -67,7 +73,7 @@ export async function GET(req: NextRequest) {
       });
     });
 
-    return NextResponse.json({ sites, venues, amount_basis: amountBasis, promotions: matched });
+    return NextResponse.json({ sites, venues, amount_basis: amountBasis, vip, promotions: matched });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
   }
