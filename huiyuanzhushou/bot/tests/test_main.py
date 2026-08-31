@@ -74,6 +74,25 @@ class QueryPanelTests(unittest.TestCase):
         params = main.build_query_params(self.base_data())
         self.assertEqual(params["venues"], "JDB,PG")
 
+    def test_account_picker_contains_add_account(self):
+        data = self.base_data()
+        data.update({"accounts": {}, "sites": {}})
+        markup = main.source_keyboard(data)
+        self.assertEqual(
+            button_by_callback(markup, "addacct").text,
+            "➕ 添加会员账户",
+        )
+
+    def test_add_account_site_picker_lists_every_site(self):
+        data = self.base_data()
+        data["sites"] = {
+            "site-1": {"id": "site-1", "name": "星空"},
+            "site-2": {"id": "site-2", "name": "银河"},
+        }
+        markup = main.add_account_site_keyboard(data)
+        self.assertEqual(button_by_callback(markup, "addsite:site-1").text, "星空")
+        self.assertEqual(button_by_callback(markup, "addsite:site-2").text, "银河")
+
 
 if __name__ == "__main__":
     unittest.main()

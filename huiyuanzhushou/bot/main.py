@@ -25,6 +25,16 @@ CATALOG_API_URL = os.getenv(
     "CATALOG_API_URL",
     "https://huiyuanzhushou.vercel.app/api/catalog",
 ).rstrip("/")
+BOT_DESCRIPTION = os.getenv(
+    "BOT_DESCRIPTION",
+    "一站式查询会员福利活动，支持按站点、金额、类型、分类和场馆筛选。",
+).strip()
+BOT_SHORT_DESCRIPTION = os.getenv(
+    "BOT_SHORT_DESCRIPTION",
+    "快速查询会员福利与预计彩金",
+).strip()
+WELCOME_IMAGE_URL = os.getenv("WELCOME_IMAGE_URL", "").strip()
+WELCOME_TEXT = os.getenv("WELCOME_TEXT", "").strip()
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -60,6 +70,22 @@ async def sb_get(path: str, params: dict[str, Any] | None = None) -> list[dict[s
         return response.json()
 
 
+async def sb_post(path: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.post(
+            f"{SUPABASE_URL}/rest/v1/{path}",
+            headers={
+                "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "return=representation",
+            },
+            json=payload,
+        )
+        response.raise_for_status()
+        return response.json()
+
+
 async def get_sites() -> list[dict[str, Any]]:
     return await sb_get(
         "member_sites",
@@ -82,8 +108,8 @@ async def get_accounts(telegram_id: int) -> list[dict[str, Any]]:
     channels = await sb_get(
         "member_contact_channels",
         {
-            "select": "user_id",
-            "channel_type": "eq.telegram",
+            "select": "user_id,membership_id",
+            "channel_type": "in.(telegram_bot,personal_telegram,main_bot,backup_bot)",
             "external_account_id": f"eq.{telegram_id}",
             "is_enabled": "eq.true",
             "limit": "1",
@@ -92,11 +118,21 @@ async def get_accounts(telegram_id: int) -> list[dict[str, Any]]:
     if not channels:
         return []
 
+    identity_filter: dict[str, str]
+    if channels[0].get("membership_id"):
+        identity_filter = {
+            "membership_id": f"eq.{channels[0]['membership_id']}"
+        }
+    elif channels[0].get("user_id"):
+        identity_filter = {"user_id": f"eq.{channels[0]['user_id']}"}
+    else:
+        return []
+
     accounts = await sb_get(
         "member_site_accounts",
         {
             "select": "id,site_id,account_name,vip_level,is_starred",
-            "user_id": f"eq.{channels[0]['user_id']}",
+            **identity_filter,
             "is_enabled": "eq.true",
             "order": "is_starred.desc,updated_at.desc",
         },
@@ -107,6 +143,48 @@ async def get_accounts(telegram_id: int) -> list[dict[str, Any]]:
         for account in accounts
         if account.get("site_id") in site_map
     ]
+
+
+async def ensure_telegram_membership(user: Any) -> str:
+    rows = await sb_post(
+        "rpc/get_or_create_telegram_membership",
+        {
+            "p_telegram_id": user.id,
+            "p_display_name": user.full_name or f"Telegram {user.id}",
+            "p_username": user.username,
+        },
+    )
+    result: Any = rows[0] if isinstance(rows, list) and rows else rows
+    membership_id = result.get("membership_id") if isinstance(result, dict) else result
+    if not membership_id:
+        raise RuntimeError("Telegram membership RPC returned no id")
+    return str(membership_id)
+
+
+async def add_site_account(user: Any, site_id: str, account_name: str) -> None:
+    membership_id = await ensure_telegram_membership(user)
+    existing = await sb_get(
+        "member_site_accounts",
+        {
+            "select": "id",
+            "membership_id": f"eq.{membership_id}",
+            "site_id": f"eq.{site_id}",
+            "account_name": f"eq.{account_name}",
+            "is_enabled": "eq.true",
+            "limit": "1",
+        },
+    )
+    if existing:
+        return
+    await sb_post(
+        "member_site_accounts",
+        {
+            "membership_id": membership_id,
+            "site_id": site_id,
+            "account_name": account_name,
+            "metadata": {"source": "telegram_bot"},
+        },
+    )
 
 
 def format_amount(value: float | int) -> str:
@@ -255,7 +333,17 @@ def source_keyboard(data: dict[str, Any]) -> InlineKeyboardMarkup:
             ]
         )
 
+    rows.append([InlineKeyboardButton("➕ 添加会员账户", callback_data="addacct")])
     rows.append([InlineKeyboardButton("⬅️ 返回", callback_data="panel")])
+    return InlineKeyboardMarkup(rows)
+
+
+def add_account_site_keyboard(data: dict[str, Any]) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(site["name"], callback_data=f"addsite:{site['id']}")]
+        for site in (data.get("sites") or {}).values()
+    ]
+    rows.append([InlineKeyboardButton("⬅️ 返回账户列表", callback_data="source")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -366,6 +454,18 @@ async def clear_amount_prompt(
         await delete_message_safely(context.bot, chat_id, prompt_id)
 
 
+async def clear_account_prompt(
+    context: ContextTypes.DEFAULT_TYPE,
+    data: dict[str, Any],
+) -> None:
+    chat_id = data.get("panel_chat_id")
+    prompt_id = data.pop("account_prompt_message_id", None)
+    data["waiting_account_name"] = False
+    data.pop("add_site_id", None)
+    if chat_id and prompt_id:
+        await delete_message_safely(context.bot, chat_id, prompt_id)
+
+
 async def edit_query_message(
     query: Any,
     text: str,
@@ -402,6 +502,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user or not message:
         return
 
+    if WELCOME_IMAGE_URL:
+        try:
+            await message.reply_photo(
+                photo=WELCOME_IMAGE_URL,
+                caption=WELCOME_TEXT or None,
+            )
+        except TelegramError:
+            log.exception("Failed to send configured welcome image")
+
     try:
         sites = await get_sites()
         accounts = await get_accounts(user.id)
@@ -422,6 +531,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "vip": None,
             "selected": set(),
             "waiting_amount": False,
+            "waiting_account_name": False,
         }
     )
 
@@ -474,6 +584,8 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         if action != "custom" and data.get("waiting_amount"):
             await clear_amount_prompt(context, data)
+        if not action.startswith("addsite:") and data.get("waiting_account_name"):
+            await clear_account_prompt(context, data)
 
         if action == "panel":
             await show_main_panel(query, data)
@@ -484,6 +596,36 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 "选择会员账户或临时站点：",
                 reply_markup=source_keyboard(data),
             )
+            return
+
+        if action == "addacct":
+            await query.edit_message_text(
+                "➕ 添加会员账户\n\n先选择账户所属站点：",
+                reply_markup=add_account_site_keyboard(data),
+            )
+            return
+
+        if action.startswith("addsite:"):
+            site = (data.get("sites") or {}).get(action[8:])
+            if not site:
+                await query.edit_message_text("站点已失效，请发送 /start 重新读取。")
+                return
+            data["add_site_id"] = site["id"]
+            data["waiting_account_name"] = True
+            await query.edit_message_text(
+                f"➕ 添加会员账户\n\n站点：{site['name']}\n请直接在下方输入会员账户名。",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("取消", callback_data="source")]]
+                ),
+            )
+            prompt = await query.message.reply_text(
+                "请输入会员账户名",
+                reply_markup=ForceReply(
+                    selective=True,
+                    input_field_placeholder="会员账户名",
+                ),
+            )
+            data["account_prompt_message_id"] = prompt.message_id
             return
 
         if action.startswith("acct:"):
@@ -592,10 +734,17 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
 
-async def custom_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     data = context.user_data
     message = update.effective_message
-    if not data.get("waiting_amount") or not message or not message.text:
+    if not message or not message.text:
+        return
+
+    if data.get("waiting_account_name"):
+        await save_account_name(update, context)
+        return
+
+    if not data.get("waiting_amount"):
         return
 
     raw_value = message.text.replace(",", "").strip()
@@ -650,6 +799,80 @@ async def custom_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await delete_message_safely(context.bot, chat_id, message.message_id)
 
 
+async def save_account_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    data = context.user_data
+    user = update.effective_user
+    message = update.effective_message
+    if not user or not message or not message.text:
+        return
+
+    account_name = " ".join(message.text.split())
+    site_id = data.get("add_site_id")
+    site = (data.get("sites") or {}).get(site_id)
+    if not site:
+        await message.reply_text("站点已失效，请发送 /start 后重试。")
+        await clear_account_prompt(context, data)
+        return
+    if not 2 <= len(account_name) <= 64:
+        await message.reply_text("账户名需要 2–64 个字符，请重新输入。")
+        return
+
+    try:
+        await add_site_account(user, site_id, account_name)
+        accounts = await get_accounts(user.id)
+    except Exception:
+        log.exception("Failed to add member site account")
+        await message.reply_text("保存账户失败，请稍后重试。")
+        return
+
+    data["accounts"] = {account["id"]: account for account in accounts}
+    account = next(
+        (
+            item
+            for item in accounts
+            if item["site_id"] == site_id and item["account_name"] == account_name
+        ),
+        None,
+    )
+    if account:
+        data.update(
+            {
+                "account_id": account["id"],
+                "site_id": account["site_id"],
+                "site_name": account["site"]["name"],
+                "account": account["account_name"],
+                "vip": account.get("vip_level"),
+            }
+        )
+        await load_venues(data)
+
+    chat_id = data.get("panel_chat_id") or message.chat_id
+    prompt_id = data.pop("account_prompt_message_id", None)
+    data["waiting_account_name"] = False
+    data.pop("add_site_id", None)
+    await delete_message_safely(context.bot, chat_id, prompt_id)
+    await delete_message_safely(context.bot, chat_id, message.message_id)
+    panel_message_id = data.get("panel_message_id")
+    if panel_message_id:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=panel_message_id,
+                text=f"✅ 已添加：{site['name']} · {account_name}\n\n{panel_text(data)}",
+                reply_markup=main_panel(data),
+            )
+            return
+        except TelegramError:
+            log.warning("Could not update account panel", exc_info=True)
+
+    sent = await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"✅ 已添加：{site['name']} · {account_name}\n\n{panel_text(data)}",
+        reply_markup=main_panel(data),
+    )
+    remember_panel(data, sent)
+
+
 async def run_query(query: Any, data: dict[str, Any]) -> None:
     params = build_query_params(data)
     await query.edit_message_text("正在查询活动…")
@@ -692,12 +915,19 @@ async def run_query(query: Any, data: dict[str, Any]) -> None:
     )
 
 
+async def setup_bot(application: Application) -> None:
+    if BOT_DESCRIPTION:
+        await application.bot.set_my_description(BOT_DESCRIPTION[:512])
+    if BOT_SHORT_DESCRIPTION:
+        await application.bot.set_my_short_description(BOT_SHORT_DESCRIPTION[:120])
+
+
 def main() -> None:
-    application = Application.builder().token(TOKEN).build()
+    application = Application.builder().token(TOKEN).post_init(setup_bot).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(callback))
     application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, custom_amount)
+        MessageHandler(filters.TEXT & ~filters.COMMAND, text_input)
     )
     log.info("Bot started with long polling")
     application.run_polling(drop_pending_updates=True)

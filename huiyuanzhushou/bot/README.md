@@ -4,6 +4,7 @@
 
 - `/start`
 - 已绑定会员：选择会员账户（自动带入站点 + VIP）
+- 未注册用户也可从“会员账户 / 站点”中直接添加并保存会员账户
 - 未绑定/临时查询：选择站点
 - 选择快捷金额或输入自定义金额
 - 自定义金额保持原查询面板，并直接唤起输入框
@@ -35,6 +36,10 @@ TELEGRAM_BOT_TOKEN=你的BotFatherToken
 SUPABASE_URL=https://pefunmkcrofwmgurlktn.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=你的Supabase服务端密钥
 CATALOG_API_URL=https://huiyuanzhushou.vercel.app/api/catalog
+BOT_DESCRIPTION=首次打开空白聊天时显示的宣传介绍（最多 512 字）
+BOT_SHORT_DESCRIPTION=机器人资料页和分享链接中的短介绍（最多 120 字）
+WELCOME_IMAGE_URL=点击 Start 后发送的宣传图片公网地址（可留空）
+WELCOME_TEXT=宣传图片说明文字（可留空）
 ```
 
 不要提交 `.env`。
@@ -56,4 +61,4 @@ journalctl -u huiyuanzhushou-bot -f
 
 ## 会员账户识别
 
-机器人用 Telegram user id 查询 `member_contact_channels.external_account_id`，找到对应 `user_id` 后，再读取 `member_site_accounts`。因此只有已经完成 Telegram 绑定的会员，`/start` 时才会直接出现会员账户；没有绑定的用户自动进入临时查询流程。
+机器人用 Telegram user id 查询 `member_contact_channels.external_account_id`，再通过 `membership_id` 读取 `member_site_accounts`。第一次添加账户时会自动建立 Telegram 轻量会员身份，以后仍可再与 H5 登录身份合并。
