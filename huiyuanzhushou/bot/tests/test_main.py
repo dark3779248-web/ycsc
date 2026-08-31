@@ -84,6 +84,11 @@ class QueryPanelTests(unittest.TestCase):
             button_by_callback(markup, "addacct").text,
             "➕ 添加会员账户",
         )
+        self.assertEqual(button_by_callback(markup, "close").text, "✖️ 关闭")
+
+    def test_main_panel_contains_close_button(self):
+        markup = main.main_panel(self.base_data())
+        self.assertEqual(button_by_callback(markup, "close").text, "✖️ 关闭查询")
 
     def test_add_account_site_picker_lists_every_site(self):
         data = self.base_data()

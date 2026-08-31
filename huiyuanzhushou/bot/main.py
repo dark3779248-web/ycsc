@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import math
 import os
@@ -54,6 +55,7 @@ CATEGORIES = [
 ]
 CATEGORY_NAMES = dict(CATEGORIES)
 QUICK_AMOUNTS = [100, 1_000, 10_000, 100_000]
+PANEL_TIMEOUT_SECONDS = 120
 
 
 async def sb_get(path: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -295,6 +297,7 @@ def main_panel(data: dict[str, Any]) -> InlineKeyboardMarkup:
         [
             [option_button(venue_label, "venues", selected=bool(selected))],
             [InlineKeyboardButton("🔍 查询符合活动", callback_data="go")],
+            [InlineKeyboardButton("✖️ 关闭查询", callback_data="close")],
         ]
     )
     return InlineKeyboardMarkup(rows)
@@ -334,7 +337,12 @@ def source_keyboard(data: dict[str, Any]) -> InlineKeyboardMarkup:
         )
 
     rows.append([InlineKeyboardButton("➕ 添加会员账户", callback_data="addacct")])
-    rows.append([InlineKeyboardButton("⬅️ 返回", callback_data="panel")])
+    rows.append(
+        [
+            InlineKeyboardButton("⬅️ 返回", callback_data="panel"),
+            InlineKeyboardButton("✖️ 关闭", callback_data="close"),
+        ]
+    )
     return InlineKeyboardMarkup(rows)
 
 
@@ -343,7 +351,12 @@ def add_account_site_keyboard(data: dict[str, Any]) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(site["name"], callback_data=f"addsite:{site['id']}")]
         for site in (data.get("sites") or {}).values()
     ]
-    rows.append([InlineKeyboardButton("⬅️ 返回账户列表", callback_data="source")])
+    rows.append(
+        [
+            InlineKeyboardButton("⬅️ 返回账户列表", callback_data="source"),
+            InlineKeyboardButton("✖️ 关闭", callback_data="close"),
+        ]
+    )
     return InlineKeyboardMarkup(rows)
 
 
@@ -389,7 +402,12 @@ def venue_keyboard(data: dict[str, Any]) -> InlineKeyboardMarkup:
             )
         rows.append(row)
 
-    rows.append([InlineKeyboardButton("✅ 完成", callback_data="panel")])
+    rows.append(
+        [
+            InlineKeyboardButton("✅ 完成", callback_data="panel"),
+            InlineKeyboardButton("✖️ 关闭", callback_data="close"),
+        ]
+    )
     return InlineKeyboardMarkup(rows)
 
 
@@ -432,6 +450,59 @@ async def load_venues(data: dict[str, Any]) -> None:
 def remember_panel(data: dict[str, Any], message: Any) -> None:
     data["panel_chat_id"] = message.chat_id
     data["panel_message_id"] = message.message_id
+
+
+def cancel_panel_timeout(data: dict[str, Any]) -> None:
+    task = data.pop("panel_timeout_task", None)
+    if task and task is not asyncio.current_task() and not task.done():
+        task.cancel()
+
+
+async def close_panel(
+    bot: Any,
+    data: dict[str, Any],
+    text: str,
+) -> None:
+    cancel_panel_timeout(data)
+    chat_id = data.get("panel_chat_id")
+    panel_message_id = data.get("panel_message_id")
+    prompt_ids = [
+        data.get("amount_prompt_message_id"),
+        data.get("account_prompt_message_id"),
+    ]
+    if chat_id:
+        for prompt_id in prompt_ids:
+            await delete_message_safely(bot, chat_id, prompt_id)
+    if chat_id and panel_message_id:
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=panel_message_id,
+                text=text,
+                reply_markup=None,
+            )
+        except TelegramError:
+            log.debug("Could not close query panel", exc_info=True)
+    data.clear()
+
+
+async def close_panel_after_timeout(bot: Any, data: dict[str, Any]) -> None:
+    try:
+        await asyncio.sleep(PANEL_TIMEOUT_SECONDS)
+        await close_panel(
+            bot,
+            data,
+            "⌛ 2 分钟未操作，本次查询已自动关闭。\n发送 /start 可重新查询。",
+        )
+    except asyncio.CancelledError:
+        return
+
+
+def refresh_panel_timeout(context: ContextTypes.DEFAULT_TYPE, data: dict[str, Any]) -> None:
+    cancel_panel_timeout(data)
+    data["panel_timeout_task"] = asyncio.create_task(
+        close_panel_after_timeout(context.bot, data)
+    )
 
 
 async def delete_message_safely(bot: Any, chat_id: int, message_id: int | None) -> None:
@@ -496,6 +567,7 @@ async def show_venue_panel(query: Any, data: dict[str, Any]) -> None:
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    cancel_panel_timeout(context.user_data)
     context.user_data.clear()
     user = update.effective_user
     message = update.effective_message
@@ -569,6 +641,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     sent = await message.reply_text(panel_text(data), reply_markup=main_panel(data))
     remember_panel(data, sent)
+    refresh_panel_timeout(context, data)
 
 
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -580,6 +653,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     action = query.data or ""
     data = context.user_data
     remember_panel(data, query.message)
+    refresh_panel_timeout(context, data)
 
     try:
         if action != "custom" and data.get("waiting_amount"):
@@ -589,6 +663,14 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         if action == "panel":
             await show_main_panel(query, data)
+            return
+
+        if action == "close":
+            await close_panel(
+                context.bot,
+                data,
+                "✅ 本次查询已关闭。\n发送 /start 可重新查询。",
+            )
             return
 
         if action == "source":
@@ -615,7 +697,10 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await query.edit_message_text(
                 f"➕ 添加会员账户\n\n站点：{site['name']}\n请直接在下方输入会员账户名。",
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("取消", callback_data="source")]]
+                    [[
+                        InlineKeyboardButton("取消", callback_data="source"),
+                        InlineKeyboardButton("✖️ 关闭", callback_data="close"),
+                    ]]
                 ),
             )
             prompt = await query.message.reply_text(
@@ -741,11 +826,14 @@ async def text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     if data.get("waiting_account_name"):
+        refresh_panel_timeout(context, data)
         await save_account_name(update, context)
         return
 
     if not data.get("waiting_amount"):
         return
+
+    refresh_panel_timeout(context, data)
 
     raw_value = message.text.replace(",", "").strip()
     try:
@@ -907,12 +995,9 @@ async def run_query(query: Any, data: dict[str, Any]) -> None:
         if len(promotions) > 10:
             output += f"\n\n另有 {len(promotions) - 10} 个活动未展开。"
 
-    await query.edit_message_text(
-        output[:3900],
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton("⬅️ 返回查询面板", callback_data="panel")]]
-        ),
-    )
+    cancel_panel_timeout(data)
+    await query.edit_message_text(output[:3900], reply_markup=None)
+    data.clear()
 
 
 async def setup_bot(application: Application) -> None:
