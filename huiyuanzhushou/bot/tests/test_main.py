@@ -40,7 +40,9 @@ class QueryPanelTests(unittest.TestCase):
 
     def test_selected_main_options_use_primary_style(self):
         markup = main.main_panel(self.base_data())
-        self.assertEqual(button_by_callback(markup, "a:1000").style, "primary")
+        selected_amount = button_by_callback(markup, "a:1000")
+        self.assertEqual(selected_amount.style, "primary")
+        self.assertTrue(selected_amount.text.startswith("🔵 ✓ "))
         self.assertEqual(button_by_callback(markup, "b:deposit").style, "primary")
         self.assertEqual(button_by_callback(markup, "c:slots").style, "primary")
         self.assertIsNone(button_by_callback(markup, "b:bet").style)

@@ -231,8 +231,8 @@ def option_button(
     selected: bool = False,
     style: str | None = None,
 ) -> InlineKeyboardButton:
-    if selected and not label.startswith("✓ "):
-        label = f"✓ {label}"
+    if selected and not label.startswith("🔵 ✓ "):
+        label = f"🔵 ✓ {label}"
     return InlineKeyboardButton(
         label,
         callback_data=callback_data,
