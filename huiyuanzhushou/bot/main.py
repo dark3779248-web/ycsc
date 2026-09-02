@@ -2,6 +2,8 @@ import asyncio
 import logging
 import math
 import os
+import re
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -12,6 +14,7 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     MenuButtonCommands,
+    ReplyKeyboardMarkup,
     Update,
 )
 from telegram.constants import ChatType
@@ -70,6 +73,32 @@ BOT_COMMANDS = (
     BotCommand("close", "关闭当前查询"),
     BotCommand("help", "查看使用说明"),
 )
+SHORTCUT_QUERY = "🔍 查询活动"
+SHORTCUT_ACCOUNTS = "👤 会员账户"
+SHORTCUT_ADD_ACCOUNT = "➕ 添加账户"
+SHORTCUT_MANAGE_ACCOUNTS = "⚙️ 管理账户"
+SHORTCUT_CLOSE = "✖️ 关闭查询"
+SHORTCUT_HELP = "❓ 使用帮助"
+SHORTCUT_LABELS = (
+    SHORTCUT_QUERY,
+    SHORTCUT_ACCOUNTS,
+    SHORTCUT_ADD_ACCOUNT,
+    SHORTCUT_MANAGE_ACCOUNTS,
+    SHORTCUT_CLOSE,
+    SHORTCUT_HELP,
+)
+
+
+def shortcut_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [
+            [SHORTCUT_QUERY, SHORTCUT_ACCOUNTS, SHORTCUT_ADD_ACCOUNT],
+            [SHORTCUT_MANAGE_ACCOUNTS, SHORTCUT_CLOSE, SHORTCUT_HELP],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="请选择快捷功能",
+    )
 
 
 async def sb_get(path: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -102,6 +131,27 @@ async def sb_post(path: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
         return response.json()
 
 
+async def sb_patch(
+    path: str,
+    params: dict[str, Any],
+    payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.patch(
+            f"{SUPABASE_URL}/rest/v1/{path}",
+            headers={
+                "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "return=representation",
+            },
+            params=params,
+            json=payload,
+        )
+        response.raise_for_status()
+        return response.json()
+
+
 async def get_sites() -> list[dict[str, Any]]:
     return await sb_get(
         "member_sites",
@@ -120,7 +170,10 @@ async def fetch_catalog(params: dict[str, Any]) -> dict[str, Any]:
         return response.json()
 
 
-async def get_accounts(telegram_id: int) -> list[dict[str, Any]]:
+async def get_accounts(
+    telegram_id: int,
+    sites: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     channels = await sb_get(
         "member_contact_channels",
         {
@@ -153,7 +206,8 @@ async def get_accounts(telegram_id: int) -> list[dict[str, Any]]:
             "order": "is_starred.desc,updated_at.desc",
         },
     )
-    site_map = {site["id"]: site for site in await get_sites()}
+    site_rows = sites if sites is not None else await get_sites()
+    site_map = {site["id"]: site for site in site_rows}
     return [
         {**account, "site": site_map[account["site_id"]]}
         for account in accounts
@@ -177,7 +231,22 @@ async def ensure_telegram_membership(user: Any) -> str:
     return str(membership_id)
 
 
-async def add_site_account(user: Any, site_id: str, account_name: str) -> None:
+async def update_site_account(account_id: str, payload: dict[str, Any]) -> None:
+    rows = await sb_patch(
+        "member_site_accounts",
+        {"id": f"eq.{account_id}", "is_enabled": "eq.true"},
+        {**payload, "updated_at": datetime.now(timezone.utc).isoformat()},
+    )
+    if not rows:
+        raise RuntimeError("Member account was not found or is disabled")
+
+
+async def add_site_account(
+    user: Any,
+    site_id: str,
+    account_name: str,
+    vip_level: int,
+) -> None:
     membership_id = await ensure_telegram_membership(user)
     existing = await sb_get(
         "member_site_accounts",
@@ -191,6 +260,7 @@ async def add_site_account(user: Any, site_id: str, account_name: str) -> None:
         },
     )
     if existing:
+        await update_site_account(existing[0]["id"], {"vip_level": vip_level})
         return
     await sb_post(
         "member_site_accounts",
@@ -198,6 +268,7 @@ async def add_site_account(user: Any, site_id: str, account_name: str) -> None:
             "membership_id": membership_id,
             "site_id": site_id,
             "account_name": account_name,
+            "vip_level": vip_level,
             "metadata": {"source": "telegram_bot"},
         },
     )
@@ -337,6 +408,31 @@ def source_keyboard(data: dict[str, Any]) -> InlineKeyboardMarkup:
                 )
             ]
         )
+        if current_account_id == account["id"]:
+            rows.extend(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "✏️ 修改名称",
+                            callback_data=f"renameacct:{account['id']}",
+                        ),
+                        InlineKeyboardButton(
+                            "🎖 修改 VIP",
+                            callback_data=f"changevip:{account['id']}",
+                        ),
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "🗑 删除账户",
+                            callback_data=f"deleteacct:{account['id']}",
+                        ),
+                        InlineKeyboardButton(
+                            "🏢 修改站点",
+                            callback_data=f"changesite:{account['id']}",
+                        ),
+                    ],
+                ]
+            )
 
     for site in (data.get("sites") or {}).values():
         rows.append(
@@ -353,10 +449,98 @@ def source_keyboard(data: dict[str, Any]) -> InlineKeyboardMarkup:
         )
 
     rows.append([InlineKeyboardButton("➕ 添加会员账户", callback_data="addacct")])
+    if data.get("accounts"):
+        rows.append(
+            [InlineKeyboardButton("⚙️ 修改 / 删除账户", callback_data="manageaccts")]
+        )
     rows.append(
         [
             InlineKeyboardButton("✖️ 关闭", callback_data="close"),
             InlineKeyboardButton("⬅️ 返回", callback_data="panel"),
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
+
+
+def manage_accounts_keyboard(data: dict[str, Any]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for account in (data.get("accounts") or {}).values():
+        vip = account.get("vip_level")
+        vip_text = f"VIP{vip}" if vip is not None else "VIP未设置"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"{account['site']['name']} · {account['account_name']} · {vip_text}",
+                    callback_data=f"manageacct:{account['id']}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton("✖️ 关闭", callback_data="close"),
+            InlineKeyboardButton("⬅️ 返回账户列表", callback_data="source"),
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
+
+
+def manage_account_text(account: dict[str, Any]) -> str:
+    vip = account.get("vip_level")
+    vip_text = f"VIP{vip}" if vip is not None else "VIP未设置"
+    return (
+        "⚙️ 管理会员账户\n\n"
+        f"🏢 站点：{account['site']['name']}\n"
+        f"👤 账户：{account['account_name']}\n"
+        f"🎖 VIP：{vip_text}\n\n"
+        "请选择要修改的内容。"
+    )
+
+
+def manage_account_keyboard(account: dict[str, Any]) -> InlineKeyboardMarkup:
+    account_id = account["id"]
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "✏️ 修改账户名", callback_data=f"renameacct:{account_id}"
+                ),
+                InlineKeyboardButton(
+                    "🎖 修改 VIP", callback_data=f"changevip:{account_id}"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "🏢 修改站点", callback_data=f"changesite:{account_id}"
+                ),
+                InlineKeyboardButton(
+                    "🗑 删除账户", callback_data=f"deleteacct:{account_id}"
+                ),
+            ],
+            [
+                InlineKeyboardButton("✖️ 关闭", callback_data="close"),
+                InlineKeyboardButton("⬅️ 返回管理列表", callback_data="manageaccts"),
+            ],
+        ]
+    )
+
+
+def change_account_site_keyboard(data: dict[str, Any]) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                site["name"], callback_data=f"setacctsite:{site['id']}"
+            )
+        ]
+        for site in (data.get("sites") or {}).values()
+    ]
+    account_id = data.get("editing_account_id")
+    rows.append(
+        [
+            InlineKeyboardButton("✖️ 关闭", callback_data="close"),
+            InlineKeyboardButton(
+                "⬅️ 返回账户",
+                callback_data=(f"manageacct:{account_id}" if account_id else "manageaccts"),
+            ),
         ]
     )
     return InlineKeyboardMarkup(rows)
@@ -452,16 +636,126 @@ def build_query_params(data: dict[str, Any]) -> dict[str, Any]:
     return params
 
 
-async def load_venues(data: dict[str, Any]) -> None:
+def venue_cache_key(site_id: str, category: str) -> str:
+    return f"{site_id}:{category}"
+
+
+def venues_are_cached(data: dict[str, Any], site_id: str | None = None) -> bool:
+    target_site_id = site_id or data.get("site_id")
+    if not target_site_id:
+        return False
+    key = venue_cache_key(target_site_id, data.get("category", "all"))
+    return key in (data.get("venue_cache") or {})
+
+
+async def fetch_site_venues(site_id: str, category: str) -> list[dict[str, Any]]:
     result = await fetch_catalog(
+        {"site_id": site_id, "category": category, "meta": 1}
+    )
+    return result.get("venues") or []
+
+
+async def load_venues(data: dict[str, Any]) -> None:
+    site_id = data["site_id"]
+    category = data.get("category", "all")
+    cache = data.setdefault("venue_cache", {})
+    key = venue_cache_key(site_id, category)
+    if key not in cache:
+        cache[key] = await fetch_site_venues(site_id, category)
+    data["venues"] = cache[key]
+    data["selected"] = set()
+
+
+async def preload_account_venues(data: dict[str, Any]) -> None:
+    category = data.get("category", "all")
+    site_ids = {
+        account["site_id"] for account in (data.get("accounts") or {}).values()
+    }
+    if data.get("site_id"):
+        site_ids.add(data["site_id"])
+    cache = data.setdefault("venue_cache", {})
+    missing = [
+        site_id
+        for site_id in site_ids
+        if venue_cache_key(site_id, category) not in cache
+    ]
+    if missing:
+        results = await asyncio.gather(
+            *(fetch_site_venues(site_id, category) for site_id in missing),
+            return_exceptions=True,
+        )
+        for site_id, result in zip(missing, results):
+            if isinstance(result, Exception):
+                log.warning("Could not preload venues for site %s", site_id)
+                continue
+            cache[venue_cache_key(site_id, category)] = result
+    await load_venues(data)
+
+
+ACCOUNT_INPUT_FLAGS = (
+    "waiting_account_name",
+    "waiting_account_vip",
+    "waiting_account_rename",
+    "waiting_account_vip_edit",
+)
+
+
+def account_input_waiting(data: dict[str, Any]) -> bool:
+    return any(data.get(flag) for flag in ACCOUNT_INPUT_FLAGS)
+
+
+def parse_vip_level(value: str) -> int | None:
+    normalized = value.strip()
+    if not normalized.isdigit():
+        return None
+    vip_level = int(normalized)
+    return vip_level if 0 <= vip_level <= 99 else None
+
+
+def select_account(data: dict[str, Any], account: dict[str, Any]) -> None:
+    data.update(
         {
-            "site_id": data["site_id"],
-            "category": data.get("category", "all"),
-            "meta": 1,
+            "account_id": account["id"],
+            "site_id": account["site_id"],
+            "site_name": account["site"]["name"],
+            "account": account.get("account_name"),
+            "vip": account.get("vip_level"),
         }
     )
-    data["venues"] = result.get("venues") or []
-    data["selected"] = set()
+
+
+async def reload_accounts(
+    data: dict[str, Any],
+    telegram_id: int,
+    preferred_account_id: str | None = None,
+) -> dict[str, Any] | None:
+    accounts = await get_accounts(telegram_id)
+    data["accounts"] = {account["id"]: account for account in accounts}
+    target = data["accounts"].get(preferred_account_id or data.get("account_id"))
+    if target is None and accounts:
+        target = accounts[0]
+
+    if target:
+        select_account(data, target)
+    else:
+        sites = data.get("sites") or {}
+        site = sites.get(data.get("site_id")) or next(iter(sites.values()), None)
+        if site:
+            data.update(
+                {
+                    "account_id": None,
+                    "site_id": site["id"],
+                    "site_name": site["name"],
+                    "account": None,
+                    "vip": None,
+                }
+            )
+        else:
+            data.update({"account_id": None, "account": None, "vip": None})
+
+    if data.get("site_id"):
+        await load_venues(data)
+    return target
 
 
 def remember_panel(data: dict[str, Any], message: Any) -> None:
@@ -548,8 +842,10 @@ async def clear_account_prompt(
 ) -> None:
     chat_id = data.get("panel_chat_id")
     prompt_id = data.pop("account_prompt_message_id", None)
-    data["waiting_account_name"] = False
-    data.pop("add_site_id", None)
+    for flag in ACCOUNT_INPUT_FLAGS:
+        data[flag] = False
+    for key in ("add_site_id", "pending_account_name", "editing_account_id"):
+        data.pop(key, None)
     if chat_id and prompt_id:
         await delete_message_safely(context.bot, chat_id, prompt_id)
 
@@ -630,6 +926,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     await reset_existing_query(context)
 
+    if not context.chat_data.pop("suppress_shortcut_once", False):
+        await message.reply_text(
+            "⌨️ 快捷菜单已打开",
+            reply_markup=shortcut_keyboard(),
+        )
+
     if WELCOME_IMAGE_URL:
         try:
             await message.reply_photo(
@@ -641,7 +943,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     try:
         sites = await get_sites()
-        accounts = await get_accounts(user.id)
+        accounts = await get_accounts(user.id, sites)
     except Exception:
         log.exception("Failed to load sites or member accounts")
         await message.reply_text("读取会员资料失败，请稍后再试。")
@@ -658,8 +960,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "category": "all",
             "vip": None,
             "selected": set(),
+            "venue_cache": {},
             "waiting_amount": False,
             "waiting_account_name": False,
+            "waiting_account_vip": False,
+            "waiting_account_rename": False,
+            "waiting_account_vip_edit": False,
         }
     )
 
@@ -689,7 +995,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     try:
-        await load_venues(data)
+        await preload_account_venues(data)
     except Exception:
         log.exception("Failed to load venues during start")
         data["venues"] = []
@@ -706,6 +1012,7 @@ async def account_command(
 ) -> None:
     if not await require_private_chat(update, context):
         return
+    context.chat_data["suppress_shortcut_once"] = True
     await start(update, context)
 
     data = context.user_data
@@ -762,6 +1069,58 @@ async def help_command(
     )
 
 
+async def open_account_subpage(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    page: str,
+) -> None:
+    context.chat_data["suppress_shortcut_once"] = True
+    await start(update, context)
+    data = context.user_data
+    chat_id = data.get("panel_chat_id")
+    panel_message_id = data.get("panel_message_id")
+    if not chat_id or not panel_message_id:
+        return
+    if page == "add":
+        text = "➕ 添加会员账户\n\n先选择账户所属站点："
+        markup = add_account_site_keyboard(data)
+    elif data.get("accounts"):
+        text = "⚙️ 选择要修改或删除的会员账户："
+        markup = manage_accounts_keyboard(data)
+    else:
+        text = "当前还没有会员账户，请先添加。"
+        markup = source_keyboard(data)
+    await context.bot.edit_message_text(
+        chat_id=chat_id,
+        message_id=panel_message_id,
+        text=text,
+        reply_markup=markup,
+    )
+
+
+async def shortcut_input(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    message = update.effective_message
+    if not message or not message.text:
+        return
+    action = message.text
+    if action == SHORTCUT_QUERY:
+        context.chat_data["suppress_shortcut_once"] = True
+        await start(update, context)
+    elif action == SHORTCUT_ACCOUNTS:
+        await account_command(update, context)
+    elif action == SHORTCUT_ADD_ACCOUNT:
+        await open_account_subpage(update, context, "add")
+    elif action == SHORTCUT_MANAGE_ACCOUNTS:
+        await open_account_subpage(update, context, "manage")
+    elif action == SHORTCUT_CLOSE:
+        await close_command(update, context)
+    elif action == SHORTCUT_HELP:
+        await help_command(update, context)
+
+
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not query.message:
@@ -776,7 +1135,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         if action != "custom" and data.get("waiting_amount"):
             await clear_amount_prompt(context, data)
-        if not action.startswith("addsite:") and data.get("waiting_account_name"):
+        if account_input_waiting(data):
             await clear_account_prompt(context, data)
 
         if action == "panel":
@@ -831,20 +1190,174 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             data["account_prompt_message_id"] = prompt.message_id
             return
 
+        if action == "manageaccts":
+            await query.edit_message_text(
+                "⚙️ 选择要修改或删除的会员账户：",
+                reply_markup=manage_accounts_keyboard(data),
+            )
+            return
+
+        if action.startswith("manageacct:"):
+            account = (data.get("accounts") or {}).get(action[11:])
+            if not account:
+                await query.edit_message_text(
+                    "会员账户已失效，请返回账户列表重新选择。",
+                    reply_markup=manage_accounts_keyboard(data),
+                )
+                return
+            data.pop("editing_account_id", None)
+            await query.edit_message_text(
+                manage_account_text(account),
+                reply_markup=manage_account_keyboard(account),
+            )
+            return
+
+        if action.startswith("renameacct:"):
+            account = (data.get("accounts") or {}).get(action[11:])
+            if not account:
+                await query.edit_message_text("会员账户已失效，请重新读取。")
+                return
+            data["editing_account_id"] = account["id"]
+            data["waiting_account_rename"] = True
+            await query.edit_message_text(
+                f"✏️ 修改账户名\n\n当前：{account['account_name']}\n请直接在下方输入新账户名。",
+                reply_markup=InlineKeyboardMarkup(
+                    [[
+                        InlineKeyboardButton("✖️ 关闭", callback_data="close"),
+                        InlineKeyboardButton(
+                            "取消", callback_data=f"manageacct:{account['id']}"
+                        ),
+                    ]]
+                ),
+            )
+            prompt = await query.message.reply_text(
+                "请输入新账户名",
+                reply_markup=ForceReply(
+                    selective=True,
+                    input_field_placeholder="新账户名",
+                ),
+            )
+            data["account_prompt_message_id"] = prompt.message_id
+            return
+
+        if action.startswith("changevip:"):
+            account = (data.get("accounts") or {}).get(action[10:])
+            if not account:
+                await query.edit_message_text("会员账户已失效，请重新读取。")
+                return
+            data["editing_account_id"] = account["id"]
+            data["waiting_account_vip_edit"] = True
+            await query.edit_message_text(
+                "🎖 修改 VIP\n\n"
+                f"账户：{account['account_name']}\n"
+                "请输入 VIP 等级（0–99，普通会员填 0）。",
+                reply_markup=InlineKeyboardMarkup(
+                    [[
+                        InlineKeyboardButton("✖️ 关闭", callback_data="close"),
+                        InlineKeyboardButton(
+                            "取消", callback_data=f"manageacct:{account['id']}"
+                        ),
+                    ]]
+                ),
+            )
+            prompt = await query.message.reply_text(
+                "请输入 VIP 等级（0–99）",
+                reply_markup=ForceReply(
+                    selective=True,
+                    input_field_placeholder="例如：0 或 8",
+                ),
+            )
+            data["account_prompt_message_id"] = prompt.message_id
+            return
+
+        if action.startswith("changesite:"):
+            account = (data.get("accounts") or {}).get(action[11:])
+            if not account:
+                await query.edit_message_text("会员账户已失效，请重新读取。")
+                return
+            data["editing_account_id"] = account["id"]
+            await query.edit_message_text(
+                f"🏢 修改站点\n\n账户：{account['account_name']}\n请选择新站点：",
+                reply_markup=change_account_site_keyboard(data),
+            )
+            return
+
+        if action.startswith("setacctsite:"):
+            user = update.effective_user
+            account_id = data.get("editing_account_id")
+            account = (data.get("accounts") or {}).get(account_id)
+            site = (data.get("sites") or {}).get(action[12:])
+            if not user or not account or not site:
+                await query.edit_message_text("账户或站点已失效，请重新读取。")
+                return
+            await update_site_account(account["id"], {"site_id": site["id"]})
+            updated = await reload_accounts(data, user.id, account["id"])
+            data.pop("editing_account_id", None)
+            if not updated:
+                await query.edit_message_text(
+                    "账户更新后未能重新读取，请发送 /start 刷新。"
+                )
+                return
+            await query.edit_message_text(
+                f"✅ 站点已修改\n\n{manage_account_text(updated)}",
+                reply_markup=manage_account_keyboard(updated),
+            )
+            return
+
+        if action.startswith("deleteacct:"):
+            account = (data.get("accounts") or {}).get(action[11:])
+            if not account:
+                await query.edit_message_text("会员账户已失效，请重新读取。")
+                return
+            await query.edit_message_text(
+                "⚠️ 确认删除会员账户？\n\n"
+                f"站点：{account['site']['name']}\n"
+                f"账户：{account['account_name']}\n\n"
+                "删除后将不再显示，但不会清除历史记录。",
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "✖️ 取消删除",
+                                callback_data=f"manageacct:{account['id']}",
+                            )
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                "🗑 确认删除",
+                                callback_data=f"confirmdelete:{account['id']}",
+                            )
+                        ],
+                    ]
+                ),
+            )
+            return
+
+        if action.startswith("confirmdelete:"):
+            user = update.effective_user
+            account = (data.get("accounts") or {}).get(action[14:])
+            if not user or not account:
+                await query.edit_message_text("会员账户已失效，请重新读取。")
+                return
+            await update_site_account(account["id"], {"is_enabled": False})
+            await reload_accounts(data, user.id)
+            await query.edit_message_text(
+                f"✅ 已删除：{account['site']['name']} · {account['account_name']}\n\n"
+                "选择会员账户或临时站点：",
+                reply_markup=source_keyboard(data),
+            )
+            return
+
         if action.startswith("acct:"):
             account = (data.get("accounts") or {}).get(action[5:])
             if not account:
                 await query.edit_message_text("会员账户已失效，请发送 /start 重新读取。")
                 return
-            data.update(
-                {
-                    "account_id": account["id"],
-                    "site_id": account["site_id"],
-                    "site_name": account["site"]["name"],
-                    "account": account.get("account_name"),
-                    "vip": account.get("vip_level"),
-                }
-            )
+            select_account(data, account)
+            if not venues_are_cached(data):
+                await query.edit_message_text(
+                    f"⏳ 正在加载 {account['site']['name']} 的场馆…"
+                )
             await load_venues(data)
             await show_venue_panel(query, data)
             return
@@ -863,6 +1376,10 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     "vip": None,
                 }
             )
+            if not venues_are_cached(data):
+                await query.edit_message_text(
+                    f"⏳ 正在加载 {site['name']} 的场馆…"
+                )
             await load_venues(data)
             await show_venue_panel(query, data)
             return
@@ -948,7 +1465,22 @@ async def text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     if data.get("waiting_account_name"):
         refresh_panel_timeout(context, data)
-        await save_account_name(update, context)
+        await save_pending_account_name(update, context)
+        return
+
+    if data.get("waiting_account_vip"):
+        refresh_panel_timeout(context, data)
+        await save_new_account_vip(update, context)
+        return
+
+    if data.get("waiting_account_rename"):
+        refresh_panel_timeout(context, data)
+        await save_account_rename(update, context)
+        return
+
+    if data.get("waiting_account_vip_edit"):
+        refresh_panel_timeout(context, data)
+        await save_account_vip_edit(update, context)
         return
 
     if not data.get("waiting_amount"):
@@ -1008,11 +1540,78 @@ async def text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await delete_message_safely(context.bot, chat_id, message.message_id)
 
 
-async def save_account_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def replace_account_prompt(
+    context: ContextTypes.DEFAULT_TYPE,
+    data: dict[str, Any],
+    message: Any,
+    text: str,
+    placeholder: str,
+) -> None:
+    chat_id = data.get("panel_chat_id") or message.chat_id
+    old_prompt_id = data.pop("account_prompt_message_id", None)
+    await delete_message_safely(context.bot, chat_id, old_prompt_id)
+    await delete_message_safely(context.bot, chat_id, message.message_id)
+    prompt = await context.bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        reply_markup=ForceReply(
+            selective=True,
+            input_field_placeholder=placeholder,
+        ),
+    )
+    data["account_prompt_message_id"] = prompt.message_id
+
+
+async def update_account_panel(
+    context: ContextTypes.DEFAULT_TYPE,
+    data: dict[str, Any],
+    message: Any,
+    text: str,
+    reply_markup: InlineKeyboardMarkup,
+) -> None:
+    chat_id = data.get("panel_chat_id") or message.chat_id
+    panel_message_id = data.get("panel_message_id")
+    if panel_message_id:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=panel_message_id,
+                text=text,
+                reply_markup=reply_markup,
+            )
+            return
+        except TelegramError:
+            log.warning("Could not update account panel", exc_info=True)
+    sent = await context.bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        reply_markup=reply_markup,
+    )
+    remember_panel(data, sent)
+
+
+async def finish_account_input(
+    context: ContextTypes.DEFAULT_TYPE,
+    data: dict[str, Any],
+    message: Any,
+) -> None:
+    chat_id = data.get("panel_chat_id") or message.chat_id
+    prompt_id = data.pop("account_prompt_message_id", None)
+    for flag in ACCOUNT_INPUT_FLAGS:
+        data[flag] = False
+    for key in ("add_site_id", "pending_account_name", "editing_account_id"):
+        data.pop(key, None)
+    await delete_message_safely(context.bot, chat_id, prompt_id)
+    await delete_message_safely(context.bot, chat_id, message.message_id)
+
+
+async def save_pending_account_name(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
     data = context.user_data
-    user = update.effective_user
     message = update.effective_message
-    if not user or not message or not message.text:
+    if not message or not message.text:
         return
 
     account_name = " ".join(message.text.split())
@@ -1023,15 +1622,83 @@ async def save_account_name(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await clear_account_prompt(context, data)
         return
     if not 2 <= len(account_name) <= 64:
-        await message.reply_text("账户名需要 2–64 个字符，请重新输入。")
+        await replace_account_prompt(
+            context,
+            data,
+            message,
+            "账户名需要 2–64 个字符，请重新输入。",
+            "会员账户名",
+        )
+        return
+
+    data["pending_account_name"] = account_name
+    data["waiting_account_name"] = False
+    data["waiting_account_vip"] = True
+    await replace_account_prompt(
+        context,
+        data,
+        message,
+        "请输入 VIP 等级（0–99，普通会员填 0）",
+        "例如：0 或 8",
+    )
+    await update_account_panel(
+        context,
+        data,
+        message,
+        "➕ 添加会员账户\n\n"
+        f"站点：{site['name']}\n"
+        f"账户：{account_name}\n"
+        "请输入 VIP 等级（0–99，普通会员填 0）。",
+        InlineKeyboardMarkup(
+            [[
+                InlineKeyboardButton("✖️ 关闭", callback_data="close"),
+                InlineKeyboardButton("取消", callback_data="source"),
+            ]]
+        ),
+    )
+
+
+async def save_new_account_vip(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    data = context.user_data
+    user = update.effective_user
+    message = update.effective_message
+    if not user or not message or not message.text:
+        return
+
+    vip_level = parse_vip_level(message.text)
+    if vip_level is None:
+        await replace_account_prompt(
+            context,
+            data,
+            message,
+            "VIP 格式不正确，请输入 0–99 的整数；普通会员填 0。",
+            "例如：0 或 8",
+        )
+        return
+
+    site_id = data.get("add_site_id")
+    account_name = data.get("pending_account_name")
+    site = (data.get("sites") or {}).get(site_id)
+    if not site or not account_name:
+        await message.reply_text("添加资料已失效，请重新添加账户。")
+        await clear_account_prompt(context, data)
         return
 
     try:
-        await add_site_account(user, site_id, account_name)
+        await add_site_account(user, site_id, account_name, vip_level)
         accounts = await get_accounts(user.id)
     except Exception:
         log.exception("Failed to add member site account")
-        await message.reply_text("保存账户失败，请稍后重试。")
+        await replace_account_prompt(
+            context,
+            data,
+            message,
+            "保存账户失败，请稍后重试，或点击取消。",
+            "VIP 等级",
+        )
         return
 
     data["accounts"] = {account["id"]: account for account in accounts}
@@ -1044,42 +1711,110 @@ async def save_account_name(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         None,
     )
     if account:
-        data.update(
-            {
-                "account_id": account["id"],
-                "site_id": account["site_id"],
-                "site_name": account["site"]["name"],
-                "account": account["account_name"],
-                "vip": account.get("vip_level"),
-            }
-        )
+        select_account(data, account)
         await load_venues(data)
 
-    chat_id = data.get("panel_chat_id") or message.chat_id
-    prompt_id = data.pop("account_prompt_message_id", None)
-    data["waiting_account_name"] = False
-    data.pop("add_site_id", None)
-    await delete_message_safely(context.bot, chat_id, prompt_id)
-    await delete_message_safely(context.bot, chat_id, message.message_id)
-    panel_message_id = data.get("panel_message_id")
-    if panel_message_id:
-        try:
-            await context.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=panel_message_id,
-                text=f"✅ 已添加：{site['name']} · {account_name}\n\n{panel_text(data)}",
-                reply_markup=main_panel(data),
-            )
-            return
-        except TelegramError:
-            log.warning("Could not update account panel", exc_info=True)
-
-    sent = await context.bot.send_message(
-        chat_id=chat_id,
-        text=f"✅ 已添加：{site['name']} · {account_name}\n\n{panel_text(data)}",
-        reply_markup=main_panel(data),
+    await finish_account_input(context, data, message)
+    await update_account_panel(
+        context,
+        data,
+        message,
+        f"✅ 已添加：{site['name']} · {account_name} · VIP{vip_level}\n\n"
+        f"{panel_text(data)}",
+        main_panel(data),
     )
-    remember_panel(data, sent)
+
+
+async def save_account_rename(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    data = context.user_data
+    user = update.effective_user
+    message = update.effective_message
+    if not user or not message or not message.text:
+        return
+    account_id = data.get("editing_account_id")
+    account = (data.get("accounts") or {}).get(account_id)
+    account_name = " ".join(message.text.split())
+    if not account:
+        await message.reply_text("会员账户已失效，请重新读取。")
+        await clear_account_prompt(context, data)
+        return
+    if not 2 <= len(account_name) <= 64:
+        await replace_account_prompt(
+            context,
+            data,
+            message,
+            "账户名需要 2–64 个字符，请重新输入。",
+            "新账户名",
+        )
+        return
+    try:
+        await update_site_account(account["id"], {"account_name": account_name})
+        updated = await reload_accounts(data, user.id, account["id"])
+    except Exception:
+        log.exception("Failed to rename member account")
+        await replace_account_prompt(
+            context, data, message, "修改失败，请稍后重试。", "新账户名"
+        )
+        return
+    await finish_account_input(context, data, message)
+    if not updated:
+        return
+    await update_account_panel(
+        context,
+        data,
+        message,
+        f"✅ 账户名已修改\n\n{manage_account_text(updated)}",
+        manage_account_keyboard(updated),
+    )
+
+
+async def save_account_vip_edit(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    data = context.user_data
+    user = update.effective_user
+    message = update.effective_message
+    if not user or not message or not message.text:
+        return
+    account_id = data.get("editing_account_id")
+    account = (data.get("accounts") or {}).get(account_id)
+    vip_level = parse_vip_level(message.text)
+    if not account:
+        await message.reply_text("会员账户已失效，请重新读取。")
+        await clear_account_prompt(context, data)
+        return
+    if vip_level is None:
+        await replace_account_prompt(
+            context,
+            data,
+            message,
+            "VIP 格式不正确，请输入 0–99 的整数；普通会员填 0。",
+            "例如：0 或 8",
+        )
+        return
+    try:
+        await update_site_account(account["id"], {"vip_level": vip_level})
+        updated = await reload_accounts(data, user.id, account["id"])
+    except Exception:
+        log.exception("Failed to update member account VIP")
+        await replace_account_prompt(
+            context, data, message, "修改失败，请稍后重试。", "VIP 等级"
+        )
+        return
+    await finish_account_input(context, data, message)
+    if not updated:
+        return
+    await update_account_panel(
+        context,
+        data,
+        message,
+        f"✅ VIP 已修改为 VIP{vip_level}\n\n{manage_account_text(updated)}",
+        manage_account_keyboard(updated),
+    )
 
 
 async def run_query(query: Any, data: dict[str, Any]) -> None:
@@ -1146,6 +1881,12 @@ def main() -> None:
     application.add_handler(CommandHandler("close", close_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CallbackQueryHandler(callback))
+    shortcut_pattern = "^(?:" + "|".join(
+        re.escape(label) for label in SHORTCUT_LABELS
+    ) + ")$"
+    application.add_handler(
+        MessageHandler(filters.Regex(shortcut_pattern), shortcut_input)
+    )
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, text_input)
     )
