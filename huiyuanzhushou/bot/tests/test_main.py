@@ -69,6 +69,18 @@ class QueryPanelTests(unittest.TestCase):
             ["start", "account", "close", "help"],
         )
 
+    def test_persistent_shortcut_keyboard_has_two_rows(self):
+        markup = main.shortcut_keyboard()
+        self.assertTrue(markup.is_persistent)
+        self.assertTrue(markup.resize_keyboard)
+        self.assertEqual(
+            [[button.text for button in row] for row in markup.keyboard],
+            [
+                ["🔍 查询活动", "👤 会员账户", "➕ 添加账户"],
+                ["⚙️ 管理账户", "✖️ 关闭查询", "❓ 使用帮助"],
+            ],
+        )
+
     def test_custom_amount_is_shown_and_selected(self):
         data = self.base_data()
         data.update({"amount": 9_000.0, "amount_mode": "custom"})
@@ -112,6 +124,76 @@ class QueryPanelTests(unittest.TestCase):
         )
         self.assertEqual(button_by_callback(markup, "close").text, "✖️ 关闭")
 
+    def test_account_picker_contains_management_entry_when_accounts_exist(self):
+        data = self.base_data()
+        data.update(
+            {
+                "accounts": {
+                    "account-1": {
+                        "id": "account-1",
+                        "site_id": "site-1",
+                        "site": {"id": "site-1", "name": "星空"},
+                        "account_name": "test001",
+                        "vip_level": 8,
+                    }
+                },
+                "sites": {},
+                "account_id": "account-1",
+            }
+        )
+        markup = main.source_keyboard(data)
+        self.assertEqual(
+            button_by_callback(markup, "manageaccts").text,
+            "⚙️ 修改 / 删除账户",
+        )
+        self.assertEqual(
+            button_by_callback(markup, "renameacct:account-1").text,
+            "✏️ 修改名称",
+        )
+        self.assertEqual(
+            button_by_callback(markup, "changevip:account-1").text,
+            "🎖 修改 VIP",
+        )
+        self.assertEqual(
+            button_by_callback(markup, "deleteacct:account-1").text,
+            "🗑 删除账户",
+        )
+
+    def test_account_management_has_all_edit_and_delete_actions(self):
+        account = {
+            "id": "account-1",
+            "site_id": "site-1",
+            "site": {"id": "site-1", "name": "星空"},
+            "account_name": "test001",
+            "vip_level": 8,
+        }
+        markup = main.manage_account_keyboard(account)
+        self.assertEqual(
+            button_by_callback(markup, "renameacct:account-1").text,
+            "✏️ 修改账户名",
+        )
+        self.assertEqual(
+            button_by_callback(markup, "changesite:account-1").text,
+            "🏢 修改站点",
+        )
+        self.assertEqual(
+            button_by_callback(markup, "changevip:account-1").text,
+            "🎖 修改 VIP",
+        )
+        self.assertEqual(
+            button_by_callback(markup, "deleteacct:account-1").text,
+            "🗑 删除账户",
+        )
+        self.assertEqual(callback_row(markup, "close"), ["close", "manageaccts"])
+
+    def test_vip_parser_accepts_only_zero_to_ninety_nine(self):
+        self.assertEqual(main.parse_vip_level("0"), 0)
+        self.assertEqual(main.parse_vip_level(" 8 "), 8)
+        self.assertEqual(main.parse_vip_level("99"), 99)
+        self.assertIsNone(main.parse_vip_level("-1"))
+        self.assertIsNone(main.parse_vip_level("100"))
+        self.assertIsNone(main.parse_vip_level("VIP8"))
+
     def test_main_panel_contains_close_button(self):
         markup = main.main_panel(self.base_data())
         self.assertEqual(button_by_callback(markup, "close").text, "✖️ 关闭查询")
@@ -145,6 +227,66 @@ class QueryPanelTests(unittest.TestCase):
 
 
 class CommandBehaviorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_venue_cache_avoids_repeated_catalog_requests(self):
+        data = {
+            "site_id": "site-1",
+            "category": "all",
+            "venue_cache": {},
+            "selected": set(),
+        }
+        original = main.fetch_site_venues
+        main.fetch_site_venues = AsyncMock(
+            return_value=[{"code": "PG", "name": "PG电子"}]
+        )
+        try:
+            await main.load_venues(data)
+            await main.load_venues(data)
+        finally:
+            mocked_fetch = main.fetch_site_venues
+            main.fetch_site_venues = original
+
+        mocked_fetch.assert_awaited_once_with("site-1", "all")
+        self.assertTrue(main.venues_are_cached(data))
+
+    async def test_account_update_targets_only_active_exact_id(self):
+        original = main.sb_patch
+        main.sb_patch = AsyncMock(return_value=[{"id": "account-1"}])
+        try:
+            await main.update_site_account("account-1", {"vip_level": 9})
+        finally:
+            mocked_patch = main.sb_patch
+            main.sb_patch = original
+
+        mocked_patch.assert_awaited_once()
+        path, params, payload = mocked_patch.await_args.args
+        self.assertEqual(path, "member_site_accounts")
+        self.assertEqual(
+            params,
+            {"id": "eq.account-1", "is_enabled": "eq.true"},
+        )
+        self.assertEqual(payload["vip_level"], 9)
+        self.assertIn("updated_at", payload)
+
+    async def test_new_account_is_saved_with_vip(self):
+        original_ensure = main.ensure_telegram_membership
+        original_get = main.sb_get
+        original_post = main.sb_post
+        main.ensure_telegram_membership = AsyncMock(return_value="membership-1")
+        main.sb_get = AsyncMock(return_value=[])
+        main.sb_post = AsyncMock(return_value=[{"id": "account-1"}])
+        try:
+            await main.add_site_account(
+                SimpleNamespace(id=123), "site-1", "test001", 8
+            )
+        finally:
+            mocked_post = main.sb_post
+            main.ensure_telegram_membership = original_ensure
+            main.sb_get = original_get
+            main.sb_post = original_post
+
+        payload = mocked_post.await_args.args[1]
+        self.assertEqual(payload["vip_level"], 8)
+
     async def test_start_reset_closes_existing_panel(self):
         bot = SimpleNamespace(edit_message_text=AsyncMock(), delete_message=AsyncMock())
         context = SimpleNamespace(
