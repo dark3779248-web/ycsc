@@ -1,0 +1,85 @@
+name: Deploy membership bot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "huiyuanzhushou/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: membership-bot-production
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: huiyuanzhushou
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: huiyuanzhushou/bot/requirements.txt
+
+      - name: Install bot dependencies
+        run: python -m pip install -r bot/requirements.txt
+
+      - name: Compile bot
+        run: python -m py_compile bot/main.py
+
+      - name: Run bot tests
+        run: python -m unittest discover -s bot/tests -v
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+    steps:
+      - name: Validate deployment secrets
+        shell: bash
+        run: |
+          test -n "$VPS_HOST"
+          test -n "$VPS_PORT"
+          test -n "$VPS_USER"
+          test -n "$VPS_SSH_KEY"
+
+      - name: Configure SSH
+        shell: bash
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/membership_bot_deploy
+          chmod 600 ~/.ssh/membership_bot_deploy
+          ssh-keyscan -p "$VPS_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy bot to VPS
+        shell: bash
+        run: |
+          ssh \
+            -i ~/.ssh/membership_bot_deploy \
+            -p "$VPS_PORT" \
+            "$VPS_USER@$VPS_HOST" \
+            'set -e
+             cd /opt/huiyuanzhushou-src
+             git fetch origin main
+             git merge --ff-only origin/main
+             cd huiyuanzhushou
+             docker compose build telegram-bot
+             docker compose up -d --no-deps --force-recreate telegram-bot
+             docker compose ps telegram-bot
+             docker compose logs --tail=30 telegram-bot'
