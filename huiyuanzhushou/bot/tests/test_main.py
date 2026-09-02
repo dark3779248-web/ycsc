@@ -159,6 +159,42 @@ class QueryPanelTests(unittest.TestCase):
             "🗑 删除账户",
         )
 
+    def test_every_account_has_its_own_action_buttons(self):
+        data = self.base_data()
+        data.update(
+            {
+                "account_id": "account-1",
+                "accounts": {
+                    account_id: {
+                        "id": account_id,
+                        "site_id": "site-1",
+                        "site": {"id": "site-1", "name": "星空"},
+                        "account_name": account_name,
+                        "vip_level": vip,
+                    }
+                    for account_id, account_name, vip in (
+                        ("account-1", "test001", 8),
+                        ("account-2", "test002", 0),
+                    )
+                },
+                "sites": {},
+            }
+        )
+        markup = main.source_keyboard(data)
+        for account_id in ("account-1", "account-2"):
+            self.assertEqual(
+                button_by_callback(markup, f"renameacct:{account_id}").text,
+                "✏️ 修改名称",
+            )
+            self.assertEqual(
+                button_by_callback(markup, f"changevip:{account_id}").text,
+                "🎖 修改 VIP",
+            )
+            self.assertEqual(
+                button_by_callback(markup, f"deleteacct:{account_id}").text,
+                "🗑 删除账户",
+            )
+
     def test_account_management_has_all_edit_and_delete_actions(self):
         account = {
             "id": "account-1",
