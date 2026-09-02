@@ -20,6 +20,13 @@ def button_by_callback(markup, callback_data):
     raise AssertionError(f"Button not found: {callback_data}")
 
 
+def callback_row(markup, callback_data):
+    for row in markup.inline_keyboard:
+        if any(button.callback_data == callback_data for button in row):
+            return [button.callback_data for button in row]
+    raise AssertionError(f"Button row not found: {callback_data}")
+
+
 class QueryPanelTests(unittest.TestCase):
     def base_data(self):
         return {
@@ -93,6 +100,23 @@ class QueryPanelTests(unittest.TestCase):
     def test_main_panel_contains_close_button(self):
         markup = main.main_panel(self.base_data())
         self.assertEqual(button_by_callback(markup, "close").text, "✖️ 关闭查询")
+        self.assertEqual(callback_row(markup, "close"), ["close", "go"])
+
+    def test_close_button_is_first_in_secondary_panels(self):
+        data = self.base_data()
+        data.update({"accounts": {}, "sites": {}})
+        self.assertEqual(
+            callback_row(main.source_keyboard(data), "close"),
+            ["close", "panel"],
+        )
+        self.assertEqual(
+            callback_row(main.add_account_site_keyboard(data), "close"),
+            ["close", "source"],
+        )
+        self.assertEqual(
+            callback_row(main.venue_keyboard(data), "close"),
+            ["close", "panel"],
+        )
 
     def test_add_account_site_picker_lists_every_site(self):
         data = self.base_data()

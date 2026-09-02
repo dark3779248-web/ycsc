@@ -296,8 +296,10 @@ def main_panel(data: dict[str, Any]) -> InlineKeyboardMarkup:
     rows.extend(
         [
             [option_button(venue_label, "venues", selected=bool(selected))],
-            [InlineKeyboardButton("🔍 查询符合活动", callback_data="go")],
-            [InlineKeyboardButton("✖️ 关闭查询", callback_data="close")],
+            [
+                InlineKeyboardButton("✖️ 关闭查询", callback_data="close"),
+                InlineKeyboardButton("🔍 查询符合活动", callback_data="go"),
+            ],
         ]
     )
     return InlineKeyboardMarkup(rows)
@@ -339,8 +341,8 @@ def source_keyboard(data: dict[str, Any]) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton("➕ 添加会员账户", callback_data="addacct")])
     rows.append(
         [
-            InlineKeyboardButton("⬅️ 返回", callback_data="panel"),
             InlineKeyboardButton("✖️ 关闭", callback_data="close"),
+            InlineKeyboardButton("⬅️ 返回", callback_data="panel"),
         ]
     )
     return InlineKeyboardMarkup(rows)
@@ -353,8 +355,8 @@ def add_account_site_keyboard(data: dict[str, Any]) -> InlineKeyboardMarkup:
     ]
     rows.append(
         [
-            InlineKeyboardButton("⬅️ 返回账户列表", callback_data="source"),
             InlineKeyboardButton("✖️ 关闭", callback_data="close"),
+            InlineKeyboardButton("⬅️ 返回账户列表", callback_data="source"),
         ]
     )
     return InlineKeyboardMarkup(rows)
@@ -405,8 +407,8 @@ def venue_keyboard(data: dict[str, Any]) -> InlineKeyboardMarkup:
 
     rows.append(
         [
-            InlineKeyboardButton("✅ 完成", callback_data="panel"),
             InlineKeyboardButton("✖️ 关闭", callback_data="close"),
+            InlineKeyboardButton("✅ 完成", callback_data="panel"),
         ]
     )
     return InlineKeyboardMarkup(rows)
@@ -699,8 +701,8 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 f"➕ 添加会员账户\n\n站点：{site['name']}\n请直接在下方输入会员账户名。",
                 reply_markup=InlineKeyboardMarkup(
                     [[
-                        InlineKeyboardButton("取消", callback_data="source"),
                         InlineKeyboardButton("✖️ 关闭", callback_data="close"),
+                        InlineKeyboardButton("取消", callback_data="source"),
                     ]]
                 ),
             )
@@ -815,7 +817,10 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.edit_message_text(
             "操作失败，请稍后重试。",
             reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("⬅️ 返回查询面板", callback_data="panel")]]
+                [[
+                    InlineKeyboardButton("✖️ 关闭", callback_data="close"),
+                    InlineKeyboardButton("⬅️ 返回查询面板", callback_data="panel"),
+                ]]
             ),
         )
 
@@ -974,7 +979,10 @@ async def run_query(query: Any, data: dict[str, Any]) -> None:
         await query.edit_message_text(
             "查询失败，请稍后重试。",
             reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("⬅️ 返回查询面板", callback_data="panel")]]
+                [[
+                    InlineKeyboardButton("✖️ 关闭", callback_data="close"),
+                    InlineKeyboardButton("⬅️ 返回查询面板", callback_data="panel"),
+                ]]
             ),
         )
         return
