@@ -59,6 +59,10 @@ systemctl status huiyuanzhushou-bot --no-pager
 journalctl -u huiyuanzhushou-bot -f
 ```
 
+## 自动部署
+
+GitHub Actions 会在 `main` 分支中的 `huiyuanzhushou` 目录更新后，先运行机器人测试；测试通过后自动连接 VPS，拉取代码并重新构建 `telegram-bot` 容器。部署使用仓库 Actions Secrets 中的 `VPS_HOST`、`VPS_PORT`、`VPS_USER` 和 `VPS_SSH_KEY`。
+
 ## 会员账户识别
 
 机器人用 Telegram user id 查询 `member_contact_channels.external_account_id`，再通过 `membership_id` 读取 `member_site_accounts`。第一次添加账户时会自动建立 Telegram 轻量会员身份，以后仍可再与 H5 登录身份合并。
