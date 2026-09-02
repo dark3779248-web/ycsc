@@ -66,6 +66,10 @@ class QueryPanelTests(unittest.TestCase):
         main.toggle_venue(data, "PG")
         self.assertEqual(data["selected"], {"JDB", "CQ9"})
 
+    def test_venue_picker_identifies_selected_site(self):
+        text = main.venue_panel_text(self.base_data())
+        self.assertIn("🏟 星空 · 选择场馆", text)
+
     def test_unlimited_venue_is_selected_when_empty(self):
         data = self.base_data()
         data["selected"] = set()

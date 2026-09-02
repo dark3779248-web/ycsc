@@ -363,12 +363,13 @@ def add_account_site_keyboard(data: dict[str, Any]) -> InlineKeyboardMarkup:
 def venue_panel_text(data: dict[str, Any]) -> str:
     venues = data.get("venues") or []
     selected = set(data.get("selected") or set())
+    site_name = data.get("site_name") or "当前站点"
     if not selected:
         status = "当前：不限场馆"
     else:
         status = f"当前已选 {len(selected)} / {len(venues)} 个场馆"
     return (
-        "🏟 选择场馆（支持多选）\n\n"
+        f"🏟 {site_name} · 选择场馆（支持多选）\n\n"
         f"{status}\n"
         "点击场馆可选中，再次点击可取消。"
     )
@@ -728,7 +729,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 }
             )
             await load_venues(data)
-            await show_main_panel(query, data)
+            await show_venue_panel(query, data)
             return
 
         if action.startswith("site:"):
@@ -746,7 +747,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 }
             )
             await load_venues(data)
-            await show_main_panel(query, data)
+            await show_venue_panel(query, data)
             return
 
         if action.startswith("a:"):
