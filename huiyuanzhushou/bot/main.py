@@ -424,13 +424,34 @@ def main_panel(data: dict[str, Any]) -> InlineKeyboardMarkup:
         if selected
         else "🏟 选择场馆（不限）"
     )
-    rows.extend(
+    rows.append([option_button(venue_label, "venues", selected=bool(selected))])
+    venues = data.get("venues") or []
+    all_venue_codes = {str(venue["code"]) for venue in venues}
+    rows.append(
         [
-            [option_button(venue_label, "venues", selected=bool(selected))],
+            option_button("不限场馆", "mvnone", selected=not selected),
+            option_button(
+                "全选",
+                "mvall",
+                selected=bool(all_venue_codes) and selected == all_venue_codes,
+            ),
+        ]
+    )
+    for index in range(0, len(venues), 2):
+        rows.append(
             [
-                InlineKeyboardButton("✖️ 关闭查询", callback_data="close"),
-                InlineKeyboardButton("🔍 查询符合活动", callback_data="go"),
-            ],
+                option_button(
+                    venue["name"],
+                    f"mv:{venue['code']}",
+                    selected=str(venue["code"]) in selected,
+                )
+                for venue in venues[index:index + 2]
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton("✖️ 关闭查询", callback_data="close"),
+            InlineKeyboardButton("🔍 查询符合活动", callback_data="go"),
         ]
     )
     return InlineKeyboardMarkup(rows)
@@ -479,25 +500,22 @@ def source_keyboard(data: dict[str, Any]) -> InlineKeyboardMarkup:
             ]
         )
 
-    for site in (data.get("sites") or {}).values():
-        rows.append(
-            [
-                option_button(
-                    f"临时 · {site['name']}",
-                    f"site:{site['id']}",
-                    selected=(
-                        current_account_id is None
-                        and data.get("site_id") == site["id"]
-                    ),
-                )
-            ]
-        )
+    if not data.get("accounts"):
+        for site in (data.get("sites") or {}).values():
+            rows.append(
+                [
+                    option_button(
+                        f"临时 · {site['name']}",
+                        f"site:{site['id']}",
+                        selected=(
+                            current_account_id is None
+                            and data.get("site_id") == site["id"]
+                        ),
+                    )
+                ]
+            )
 
     rows.append([InlineKeyboardButton("➕ 添加会员账户", callback_data="addacct")])
-    if data.get("accounts"):
-        rows.append(
-            [InlineKeyboardButton("⚙️ 修改 / 删除账户", callback_data="manageaccts")]
-        )
     rows.append(
         [
             InlineKeyboardButton("✖️ 关闭", callback_data="close"),
@@ -1461,7 +1479,26 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if action.startswith("c:"):
             next_category = action[2:]
             if next_category in CATEGORY_NAMES and toggle_category(data, next_category):
+                if not venues_are_cached(data):
+                    await query.edit_message_text("⏳ 正在加载对应分类的子场馆…")
                 await load_venues(data)
+            await show_main_panel(query, data)
+            return
+
+        if action == "mvall":
+            data["selected"] = {
+                str(venue["code"]) for venue in data.get("venues") or []
+            }
+            await show_main_panel(query, data)
+            return
+
+        if action == "mvnone":
+            data["selected"] = set()
+            await show_main_panel(query, data)
+            return
+
+        if action.startswith("mv:"):
+            toggle_venue(data, action[3:])
             await show_main_panel(query, data)
             return
 

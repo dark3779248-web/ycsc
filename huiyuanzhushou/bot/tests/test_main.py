@@ -162,10 +162,6 @@ class QueryPanelTests(unittest.TestCase):
         )
         markup = main.source_keyboard(data)
         self.assertEqual(
-            button_by_callback(markup, "manageaccts").text,
-            "⚙️ 修改 / 删除账户",
-        )
-        self.assertEqual(
             button_by_callback(markup, "renameacct:account-1").text,
             "✏️ 修改名称",
         )
@@ -177,6 +173,38 @@ class QueryPanelTests(unittest.TestCase):
             button_by_callback(markup, "deleteacct:account-1").text,
             "🗑 删除账户",
         )
+
+    def test_temporary_sites_are_hidden_when_accounts_exist(self):
+        data = self.base_data()
+        data.update(
+            {
+                "account_id": "account-1",
+                "accounts": {
+                    "account-1": {
+                        "id": "account-1",
+                        "site_id": "site-1",
+                        "site": {"id": "site-1", "name": "星空"},
+                        "account_name": "test001",
+                        "vip_level": 8,
+                    }
+                },
+                "sites": {"site-1": {"id": "site-1", "name": "星空"}},
+            }
+        )
+        callbacks = [
+            button.callback_data
+            for row in main.source_keyboard(data).inline_keyboard
+            for button in row
+        ]
+        self.assertNotIn("site:site-1", callbacks)
+
+    def test_subvenues_are_expanded_in_main_panel(self):
+        data = self.base_data()
+        markup = main.main_panel(data)
+        self.assertEqual(button_by_callback(markup, "mv:PG").text, "🔵 ✓ PG电子")
+        self.assertEqual(button_by_callback(markup, "mv:JDB").style, "primary")
+        self.assertIsNone(button_by_callback(markup, "mv:CQ9").style)
+        self.assertEqual(button_by_callback(markup, "mvnone").text, "不限场馆")
 
     def test_every_account_has_its_own_action_buttons(self):
         data = self.base_data()
