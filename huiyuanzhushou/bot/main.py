@@ -405,31 +405,30 @@ def source_keyboard(data: dict[str, Any]) -> InlineKeyboardMarkup:
                 )
             ]
         )
-        if current_account_id == account["id"]:
-            rows.extend(
+        rows.extend(
+            [
                 [
-                    [
-                        InlineKeyboardButton(
-                            "✏️ 修改名称",
-                            callback_data=f"renameacct:{account['id']}",
-                        ),
-                        InlineKeyboardButton(
-                            "🎖 修改 VIP",
-                            callback_data=f"changevip:{account['id']}",
-                        ),
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            "🗑 删除账户",
-                            callback_data=f"deleteacct:{account['id']}",
-                        ),
-                        InlineKeyboardButton(
-                            "🏢 修改站点",
-                            callback_data=f"changesite:{account['id']}",
-                        ),
-                    ],
-                ]
-            )
+                    InlineKeyboardButton(
+                        "✏️ 修改名称",
+                        callback_data=f"renameacct:{account['id']}",
+                    ),
+                    InlineKeyboardButton(
+                        "🎖 修改 VIP",
+                        callback_data=f"changevip:{account['id']}",
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🗑 删除账户",
+                        callback_data=f"deleteacct:{account['id']}",
+                    ),
+                    InlineKeyboardButton(
+                        "🏢 修改站点",
+                        callback_data=f"changesite:{account['id']}",
+                    ),
+                ],
+            ]
+        )
 
     for site in (data.get("sites") or {}).values():
         rows.append(
