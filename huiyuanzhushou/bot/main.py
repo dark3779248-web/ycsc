@@ -400,11 +400,22 @@ def main_panel(data: dict[str, Any]) -> InlineKeyboardMarkup:
         ]
     )
 
-    for index in range(0, len(CATEGORIES), 4):
+    all_value, all_name = CATEGORIES[0]
+    rows.append(
+        [
+            option_button(
+                all_name,
+                f"c:{all_value}",
+                selected=all_value in categories,
+            )
+        ]
+    )
+    specific_categories = CATEGORIES[1:]
+    for index in range(0, len(specific_categories), 4):
         rows.append(
             [
                 option_button(name, f"c:{value}", selected=value in categories)
-                for value, name in CATEGORIES[index:index + 4]
+                for value, name in specific_categories[index:index + 4]
             ]
         )
 
