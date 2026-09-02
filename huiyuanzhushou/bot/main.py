@@ -69,9 +69,6 @@ QUICK_AMOUNTS = [100, 1_000, 10_000, 100_000]
 PANEL_TIMEOUT_SECONDS = 120
 BOT_COMMANDS = (
     BotCommand("start", "打开或刷新查询面板"),
-    BotCommand("account", "添加或管理会员账户"),
-    BotCommand("close", "关闭当前查询"),
-    BotCommand("help", "查看使用说明"),
 )
 SHORTCUT_QUERY = "🔍 查询活动"
 SHORTCUT_ACCOUNTS = "👤 会员账户"
