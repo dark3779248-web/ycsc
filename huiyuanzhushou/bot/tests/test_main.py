@@ -66,7 +66,7 @@ class QueryPanelTests(unittest.TestCase):
     def test_bot_command_menu_contains_confirmed_commands(self):
         self.assertEqual(
             [command.command for command in main.BOT_COMMANDS],
-            ["start", "account", "close", "help"],
+            ["start"],
         )
 
     def test_persistent_shortcut_keyboard_has_two_rows(self):
