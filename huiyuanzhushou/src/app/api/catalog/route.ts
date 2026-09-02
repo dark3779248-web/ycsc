@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 
 const url = process.env.SUPABASE_URL;
 const key = process.env.SUPABASE_PUBLISHABLE_KEY;
+const validCategories = new Set(['sports', 'live', 'esports', 'chess', 'slots', 'entertainment', 'lottery']);
+const nonLotteryCategories = ['sports', 'live', 'esports', 'chess', 'slots', 'entertainment'];
 
 async function sb(path: string) {
   if (!url || !key) throw new Error('Missing Supabase environment variables');
@@ -20,7 +22,15 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const siteId = searchParams.get('site_id');
-    const category = searchParams.get('category') || 'all';
+    const requestedCategories = (searchParams.get('category') || 'all')
+      .split(',')
+      .map(value => value.trim())
+      .filter(Boolean);
+    const includesAll = requestedCategories.includes('all');
+    const categories = includesAll
+      ? nonLotteryCategories
+      : [...new Set(requestedCategories.filter(value => validCategories.has(value)))];
+    if (!categories.length) categories.push(...nonLotteryCategories);
     const amount = Number(searchParams.get('amount') || 0);
     const amountBasis = searchParams.get('amount_basis') === 'deposit' ? 'deposit' : 'bet';
     const vipParam = searchParams.get('vip');
@@ -34,7 +44,10 @@ export async function GET(req: NextRequest) {
     const sites = await sb('member_sites?select=id,code,name&is_enabled=eq.true&order=sort_order.asc,name.asc');
     if (!siteId) return NextResponse.json({ sites, venues: [], promotions: [] });
 
-    const venueCategoryFilter = category === 'all' ? '' : `&category=in.(all,${encodeURIComponent(category)})`;
+    const venueCategories = ['all', ...categories]
+      .map(value => encodeURIComponent(value))
+      .join(',');
+    const venueCategoryFilter = `&category=in.(${venueCategories})`;
     const venues = await sb(`member_venues?select=id,site_id,category,code,name&site_id=eq.${encodeURIComponent(siteId)}&is_enabled=eq.true${venueCategoryFilter}&order=sort_order.asc,name.asc`);
 
     if (metaOnly) return NextResponse.json({ sites, venues, promotions: [] });
@@ -49,7 +62,7 @@ export async function GET(req: NextRequest) {
       const promotionRules = rules.filter((rule: { promotion_id: string; category: string; min_amount: number | null; max_amount: number | null; amount_basis?: string; vip_min?: number | null; vip_max?: number | null; venue_codes?: unknown }) => {
         if (rule.promotion_id !== promotion.id) return false;
         if ((rule.amount_basis || 'bet') !== amountBasis) return false;
-        if (category !== 'all' && rule.category !== 'all' && rule.category !== category) return false;
+        if (rule.category !== 'all' && !categories.includes(rule.category)) return false;
         if (rule.min_amount !== null && amount < Number(rule.min_amount)) return false;
         if (rule.max_amount !== null && amount > Number(rule.max_amount)) return false;
         if (vip !== null && Number.isFinite(vip)) {
@@ -73,7 +86,7 @@ export async function GET(req: NextRequest) {
       });
     });
 
-    return NextResponse.json({ sites, venues, amount_basis: amountBasis, vip, promotions: matched });
+    return NextResponse.json({ sites, venues, categories, amount_basis: amountBasis, vip, promotions: matched });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
   }

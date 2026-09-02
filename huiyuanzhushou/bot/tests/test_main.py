@@ -56,6 +56,25 @@ class QueryPanelTests(unittest.TestCase):
         self.assertEqual(button_by_callback(markup, "c:slots").style, "primary")
         self.assertIsNone(button_by_callback(markup, "b:bet").style)
 
+    def test_categories_support_multiple_selection(self):
+        data = self.base_data()
+        data.pop("category")
+        data["categories"] = {"sports", "live"}
+        markup = main.main_panel(data)
+        self.assertEqual(button_by_callback(markup, "c:sports").style, "primary")
+        self.assertEqual(button_by_callback(markup, "c:live").style, "primary")
+        self.assertIsNone(button_by_callback(markup, "c:all").style)
+        self.assertEqual(main.build_query_params(data)["category"], "sports,live")
+
+        main.toggle_category(data, "sports")
+        self.assertEqual(data["categories"], {"live"})
+        main.toggle_category(data, "live")
+        self.assertEqual(data["categories"], {"all"})
+
+    def test_all_category_is_labeled_without_lottery(self):
+        button = button_by_callback(main.main_panel(self.base_data()), "c:all")
+        self.assertEqual(button.text, "全站（不含彩票）")
+
     def test_deposit_is_before_bet(self):
         markup = main.main_panel(self.base_data())
         self.assertEqual(

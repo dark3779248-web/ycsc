@@ -55,7 +55,7 @@ logging.basicConfig(
 log = logging.getLogger("huiyuanzhushou-bot")
 
 CATEGORIES = [
-    ("all", "全站"),
+    ("all", "全站（不含彩票）"),
     ("sports", "体育"),
     ("live", "真人"),
     ("esports", "电竞"),
@@ -287,10 +287,48 @@ def selected_venue_names(data: dict[str, Any]) -> list[str]:
     ]
 
 
+def selected_categories(data: dict[str, Any]) -> set[str]:
+    categories = data.get("categories")
+    if categories is not None:
+        selected = set(categories)
+    else:
+        selected = {data.get("category", "all")}
+    return selected or {"all"}
+
+
+def category_query_value(data: dict[str, Any]) -> str:
+    selected = selected_categories(data)
+    if "all" in selected:
+        return "all"
+    ordered = [value for value, _ in CATEGORIES if value in selected]
+    return ",".join(ordered) or "all"
+
+
+def toggle_category(data: dict[str, Any], category: str) -> bool:
+    before = selected_categories(data)
+    if category == "all":
+        after = {"all"}
+    else:
+        after = before - {"all"}
+        if category in after:
+            after.remove(category)
+        else:
+            after.add(category)
+        if not after:
+            after = {"all"}
+    data["categories"] = after
+    data.pop("category", None)
+    return after != before
+
+
 def panel_text(data: dict[str, Any]) -> str:
     names = selected_venue_names(data)
     venue_text = "、".join(names) if names else "不限场馆"
     vip = f" · VIP{data['vip']}" if data.get("vip") is not None else ""
+    categories = selected_categories(data)
+    category_text = "、".join(
+        name for value, name in CATEGORIES if value in categories
+    )
     prompt = ""
     if data.get("waiting_amount"):
         prompt = "\n\n✍️ 请直接在下方输入金额，例如：9000"
@@ -301,7 +339,7 @@ def panel_text(data: dict[str, Any]) -> str:
         f"🏢 站点：{data.get('site_name', '请选择')}\n"
         f"💰 金额：{format_amount(data.get('amount', 1_000))}\n"
         f"💳 类型：{'充值' if data.get('basis') == 'deposit' else '投注'}\n"
-        f"🎮 分类：{CATEGORY_NAMES.get(data.get('category', 'all'), '全站')}\n"
+        f"🎮 分类：{category_text}\n"
         f"🏟 场馆：{venue_text}\n\n"
         "修改条件后，直接点击查询。"
         f"{prompt}"
@@ -328,7 +366,7 @@ def main_panel(data: dict[str, Any]) -> InlineKeyboardMarkup:
     amount = float(data.get("amount", 1_000))
     amount_mode = data.get("amount_mode", "quick")
     basis = data.get("basis", "bet")
-    category = data.get("category", "all")
+    categories = selected_categories(data)
     selected = set(data.get("selected") or set())
 
     rows: list[list[InlineKeyboardButton]] = [
@@ -365,7 +403,7 @@ def main_panel(data: dict[str, Any]) -> InlineKeyboardMarkup:
     for index in range(0, len(CATEGORIES), 4):
         rows.append(
             [
-                option_button(name, f"c:{value}", selected=category == value)
+                option_button(name, f"c:{value}", selected=value in categories)
                 for value, name in CATEGORIES[index:index + 4]
             ]
         )
@@ -622,7 +660,7 @@ def build_query_params(data: dict[str, Any]) -> dict[str, Any]:
         "site_id": data["site_id"],
         "amount": data["amount"],
         "amount_basis": data.get("basis", "bet"),
-        "category": data.get("category", "all"),
+        "category": category_query_value(data),
     }
     if data.get("vip") is not None:
         params["vip"] = data["vip"]
@@ -640,7 +678,7 @@ def venues_are_cached(data: dict[str, Any], site_id: str | None = None) -> bool:
     target_site_id = site_id or data.get("site_id")
     if not target_site_id:
         return False
-    key = venue_cache_key(target_site_id, data.get("category", "all"))
+    key = venue_cache_key(target_site_id, category_query_value(data))
     return key in (data.get("venue_cache") or {})
 
 
@@ -653,7 +691,7 @@ async def fetch_site_venues(site_id: str, category: str) -> list[dict[str, Any]]
 
 async def load_venues(data: dict[str, Any]) -> None:
     site_id = data["site_id"]
-    category = data.get("category", "all")
+    category = category_query_value(data)
     cache = data.setdefault("venue_cache", {})
     key = venue_cache_key(site_id, category)
     if key not in cache:
@@ -663,7 +701,7 @@ async def load_venues(data: dict[str, Any]) -> None:
 
 
 async def preload_account_venues(data: dict[str, Any]) -> None:
-    category = data.get("category", "all")
+    category = category_query_value(data)
     site_ids = {
         account["site_id"] for account in (data.get("accounts") or {}).values()
     }
@@ -953,7 +991,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "amount": 1_000.0,
             "amount_mode": "quick",
             "basis": "bet",
-            "category": "all",
+            "categories": {"all"},
             "vip": None,
             "selected": set(),
             "venue_cache": {},
@@ -1411,8 +1449,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         if action.startswith("c:"):
             next_category = action[2:]
-            if next_category != data.get("category"):
-                data["category"] = next_category
+            if next_category in CATEGORY_NAMES and toggle_category(data, next_category):
                 await load_venues(data)
             await show_main_panel(query, data)
             return

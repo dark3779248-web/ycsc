@@ -16,7 +16,7 @@ type Promotion = {
 };
 
 const categories = [
-  ['all', '全站'], ['sports', '体育'], ['live', '真人'], ['esports', '电竞'],
+  ['all', '全站（不含彩票）'], ['sports', '体育'], ['live', '真人'], ['esports', '电竞'],
   ['chess', '棋牌'], ['slots', '电子'], ['entertainment', '娱乐'], ['lottery', '彩票'],
 ];
 
