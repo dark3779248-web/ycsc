@@ -2,6 +2,8 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
 os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
@@ -53,6 +55,19 @@ class QueryPanelTests(unittest.TestCase):
         self.assertEqual(button_by_callback(markup, "b:deposit").style, "primary")
         self.assertEqual(button_by_callback(markup, "c:slots").style, "primary")
         self.assertIsNone(button_by_callback(markup, "b:bet").style)
+
+    def test_deposit_is_before_bet(self):
+        markup = main.main_panel(self.base_data())
+        self.assertEqual(
+            callback_row(markup, "b:deposit"),
+            ["b:deposit", "b:bet"],
+        )
+
+    def test_bot_command_menu_contains_confirmed_commands(self):
+        self.assertEqual(
+            [command.command for command in main.BOT_COMMANDS],
+            ["start", "account", "close", "help"],
+        )
 
     def test_custom_amount_is_shown_and_selected(self):
         data = self.base_data()
@@ -127,6 +142,50 @@ class QueryPanelTests(unittest.TestCase):
         markup = main.add_account_site_keyboard(data)
         self.assertEqual(button_by_callback(markup, "addsite:site-1").text, "星空")
         self.assertEqual(button_by_callback(markup, "addsite:site-2").text, "银河")
+
+
+class CommandBehaviorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_start_reset_closes_existing_panel(self):
+        bot = SimpleNamespace(edit_message_text=AsyncMock(), delete_message=AsyncMock())
+        context = SimpleNamespace(
+            bot=bot,
+            user_data={
+                "panel_chat_id": 123,
+                "panel_message_id": 456,
+                "amount_prompt_message_id": None,
+                "account_prompt_message_id": None,
+            },
+        )
+
+        await main.reset_existing_query(context)
+
+        bot.edit_message_text.assert_awaited_once_with(
+            chat_id=123,
+            message_id=456,
+            text="♻️ 原查询面板已关闭，请使用下方的新面板。",
+            reply_markup=None,
+        )
+        self.assertEqual(context.user_data, {})
+
+    async def test_group_command_redirects_to_private_chat(self):
+        message = SimpleNamespace(reply_text=AsyncMock())
+        update = SimpleNamespace(
+            effective_chat=SimpleNamespace(type="group"),
+            effective_message=message,
+        )
+        context = SimpleNamespace(
+            bot=SimpleNamespace(username="member_helper_bot"),
+        )
+
+        allowed = await main.require_private_chat(update, context)
+
+        self.assertFalse(allowed)
+        message.reply_text.assert_awaited_once()
+        reply_markup = message.reply_text.await_args.kwargs["reply_markup"]
+        self.assertEqual(
+            reply_markup.inline_keyboard[0][0].url,
+            "https://t.me/member_helper_bot?start=group",
+        )
 
 
 if __name__ == "__main__":

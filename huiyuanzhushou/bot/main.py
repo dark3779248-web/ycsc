@@ -6,7 +6,15 @@ from typing import Any
 
 import httpx
 from dotenv import load_dotenv
-from telegram import ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    BotCommand,
+    ForceReply,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    MenuButtonCommands,
+    Update,
+)
+from telegram.constants import ChatType
 from telegram.error import BadRequest, TelegramError
 from telegram.ext import (
     Application,
@@ -56,6 +64,12 @@ CATEGORIES = [
 CATEGORY_NAMES = dict(CATEGORIES)
 QUICK_AMOUNTS = [100, 1_000, 10_000, 100_000]
 PANEL_TIMEOUT_SECONDS = 120
+BOT_COMMANDS = (
+    BotCommand("start", "打开或刷新查询面板"),
+    BotCommand("account", "添加或管理会员账户"),
+    BotCommand("close", "关闭当前查询"),
+    BotCommand("help", "查看使用说明"),
+)
 
 
 async def sb_get(path: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -275,8 +289,8 @@ def main_panel(data: dict[str, Any]) -> InlineKeyboardMarkup:
     )
     rows.append(
         [
-            option_button("投注", "b:bet", selected=basis == "bet"),
             option_button("充值", "b:deposit", selected=basis == "deposit"),
+            option_button("投注", "b:bet", selected=basis == "bet"),
         ]
     )
 
@@ -569,13 +583,52 @@ async def show_venue_panel(query: Any, data: dict[str, Any]) -> None:
         remember_panel(data, query.message)
 
 
+async def require_private_chat(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> bool:
+    chat = update.effective_chat
+    message = update.effective_message
+    if chat and chat.type == ChatType.PRIVATE:
+        return True
+    if not message:
+        return False
+
+    username = context.bot.username
+    reply_markup = None
+    if username:
+        reply_markup = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("🔐 进入私聊查询", url=f"https://t.me/{username}?start=group")]]
+        )
+    await message.reply_text(
+        "为保护会员账户和查询条件，请进入机器人私聊使用。",
+        reply_markup=reply_markup,
+    )
+    return False
+
+
+async def reset_existing_query(context: ContextTypes.DEFAULT_TYPE) -> None:
+    data = context.user_data
+    if data.get("panel_chat_id") and data.get("panel_message_id"):
+        await close_panel(
+            context.bot,
+            data,
+            "♻️ 原查询面板已关闭，请使用下方的新面板。",
+        )
+        return
+    cancel_panel_timeout(data)
+    data.clear()
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    cancel_panel_timeout(context.user_data)
-    context.user_data.clear()
     user = update.effective_user
     message = update.effective_message
     if not user or not message:
         return
+    if not await require_private_chat(update, context):
+        return
+
+    await reset_existing_query(context)
 
     if WELCOME_IMAGE_URL:
         try:
@@ -645,6 +698,68 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     sent = await message.reply_text(panel_text(data), reply_markup=main_panel(data))
     remember_panel(data, sent)
     refresh_panel_timeout(context, data)
+
+
+async def account_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    if not await require_private_chat(update, context):
+        return
+    await start(update, context)
+
+    data = context.user_data
+    chat_id = data.get("panel_chat_id")
+    panel_message_id = data.get("panel_message_id")
+    if not chat_id or not panel_message_id:
+        return
+    try:
+        await context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=panel_message_id,
+            text="选择会员账户或临时站点：",
+            reply_markup=source_keyboard(data),
+        )
+    except TelegramError:
+        log.exception("Could not open account picker from /account")
+
+
+async def close_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    if not await require_private_chat(update, context):
+        return
+    message = update.effective_message
+    data = context.user_data
+    if data.get("panel_chat_id") and data.get("panel_message_id"):
+        await close_panel(
+            context.bot,
+            data,
+            "✅ 本次查询已关闭。\n发送 /start 可重新查询。",
+        )
+        return
+    cancel_panel_timeout(data)
+    data.clear()
+    if message:
+        await message.reply_text("当前没有进行中的查询。发送 /start 可开始查询。")
+
+
+async def help_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    message = update.effective_message
+    if not message:
+        return
+    await message.reply_text(
+        "会员福利助手命令：\n\n"
+        "/start  打开或刷新查询面板\n"
+        "/account  添加或管理会员账户\n"
+        "/close  关闭当前查询\n"
+        "/help  查看使用说明\n\n"
+        "会员账户和活动查询仅在机器人私聊中进行。"
+    )
 
 
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1010,15 +1125,26 @@ async def run_query(query: Any, data: dict[str, Any]) -> None:
 
 
 async def setup_bot(application: Application) -> None:
+    await application.bot.set_my_commands(list(BOT_COMMANDS))
+    await application.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
     if BOT_DESCRIPTION:
         await application.bot.set_my_description(BOT_DESCRIPTION[:512])
     if BOT_SHORT_DESCRIPTION:
         await application.bot.set_my_short_description(BOT_SHORT_DESCRIPTION[:120])
+    bot_info = await application.bot.get_me()
+    log.info(
+        "Bot menu configured (can_join_groups=%s, privacy_mode=%s)",
+        bot_info.can_join_groups,
+        bot_info.can_read_all_group_messages is not True,
+    )
 
 
 def main() -> None:
     application = Application.builder().token(TOKEN).post_init(setup_bot).build()
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("account", account_command))
+    application.add_handler(CommandHandler("close", close_command))
+    application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CallbackQueryHandler(callback))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, text_input)
